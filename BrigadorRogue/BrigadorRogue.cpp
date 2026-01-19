@@ -11,8 +11,6 @@
 #include <stdint.h>
 #include <Psapi.h>
 
-
-
 using namespace std;
 
 const enum states {

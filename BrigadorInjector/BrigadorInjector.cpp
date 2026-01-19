@@ -43,15 +43,36 @@ int getProcId(const wchar_t* target) {
     return pid;
 }
 
-int main(int argc, char* argv[]) {
-    //BOOL suc = Inject_SetDebugPrivilege();
-    //cout << suc << "\n";
-
-
+int main(int argc, TCHAR* argv[]) {
+    
     const wchar_t* process = L"brigador.exe";
-    int pid = getProcId(process);
 
-    cout << pid << "\n";
+    STARTUPINFO si;
+    PROCESS_INFORMATION pi;
+
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    ZeroMemory(&pi, sizeof(pi));
+
+    // Start the child process. 
+    if (!CreateProcess(process,   // No module name (use command line)
+        0,        // Command line
+        NULL,           // Process handle not inheritable
+        NULL,           // Thread handle not inheritable
+        FALSE,          // Set handle inheritance to FALSE
+        0,              // No creation flags
+        NULL,           // Use parent's environment block
+        NULL,           // Use parent's starting directory 
+        &si,            // Pointer to STARTUPINFO structure
+        &pi)           // Pointer to PROCESS_INFORMATION structure
+        )
+    {
+        printf("CreateProcess failed (%d).\n", GetLastError());
+        return -1;
+    }
+    // Close process and thread handles. 
+    CloseHandle(pi.hThread);
+    Sleep(4000);
 
     char dll[] = "BrigadorRogue.dll";
     char dllPath[MAX_PATH] = { 0 };
@@ -59,8 +80,12 @@ int main(int argc, char* argv[]) {
     GetFullPathNameA(dll, MAX_PATH, dllPath, NULL);
     cout << dllPath << "\n";
 
+    /*
+    int pid = getProcId(process);
+    cout << pid << "\n";
     HANDLE hProcess = OpenProcess(PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ, FALSE, pid);
-
+    */
+    HANDLE hProcess = pi.hProcess;
     LPVOID pszLibFileRemote = VirtualAllocEx(hProcess, NULL, strlen(dllPath) + 1, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     cout << hProcess << "\n";
     cout << pszLibFileRemote << "\n";
@@ -83,6 +108,6 @@ int main(int argc, char* argv[]) {
     WaitForSingleObject(handleThread, INFINITE);
     CloseHandle(handleThread);
     VirtualFreeEx(hProcess, dllPath, 0, MEM_RELEASE);
-    CloseHandle(hProcess);
+    CloseHandle(pi.hProcess);
     return (int)handleThread;
 }
