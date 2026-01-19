@@ -30,4 +30,32 @@
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
+  <ItemGroup>
+    <None Include="Patches\addButtonsChooseDistrictV3">
+      <Filter>Resource Files</Filter>
+    </None>
+    <None Include="Patches\AlterState">
+      <Filter>Resource Files</Filter>
+    </None>
+    <None Include="Patches\createUIButtonUseSetString">
+      <Filter>Resource Files</Filter>
+    </None>
+    <None Include="Patches\SetState">
+      <Filter>Resource Files</Filter>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <MASM Include="Patches\addButtonsChooseDistrictV3.ASM">
+      <Filter>Resource Files</Filter>
+    </MASM>
+    <MASM Include="Patches\AlterState.ASM">
+      <Filter>Resource Files</Filter>
+    </MASM>
+    <MASM Include="Patches\createUIButtonUseSetString.ASM">
+      <Filter>Resource Files</Filter>
+    </MASM>
+    <MASM Include="Patches\SetState.ASM">
+      <Filter>Resource Files</Filter>
+    </MASM>
+  </ItemGroup>
 </Project>

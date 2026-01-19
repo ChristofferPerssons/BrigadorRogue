@@ -631,7 +631,7 @@ bool subtractMoney(double subtractAmount) {
     }
 }
 
-#define upgradeCost 000000
+#define upgradeCost 500000
 #define districtItemSize 0x2110
 
 //Handles a player's action on the choose district menu in freelancer by observing the state of the currently selected button
