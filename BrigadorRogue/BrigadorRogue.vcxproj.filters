@@ -58,4 +58,9 @@
       <Filter>Resource Files</Filter>
     </MASM>
   </ItemGroup>
+  <ItemGroup>
+    <Text Include="Docs\README.txt">
+      <Filter>Resource Files</Filter>
+    </Text>
+  </ItemGroup>
 </Project>
