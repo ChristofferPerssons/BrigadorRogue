@@ -270,7 +270,8 @@ asmHook setState {
 
 //Used to fetch index of added button pressed
 const enum buttons {
-    M_PosOvercharge
+    M_Repair
+    , M_PosOvercharge
     , M_PosForwardSpeed
     , P_PosCapacity
     , P_PosFireRate
@@ -284,7 +285,8 @@ const enum buttons {
 
 //Must correspond to buttons enum
 const char* addedButtonStrings[] = {
-    {"Mech: +Max Overcharge"}
+    {"Mech: Repair"}
+    , {"Mech: +Max Overcharge"}
     , {"Mech: +Forward Speed"}
     , {"Primary: +Capacity"}
     , {"Primary: +Fire Rate"} 
@@ -294,7 +296,6 @@ const char* addedButtonStrings[] = {
     , {"Secondary: +Fire Rate"} 
     , {"Secondary: +Projectiles, -Accuracy"}
     , {"Secondary: +Structure Damage"}
-
 };
 
 #define addedButtons sizeof(addedButtonStrings) / sizeof(addedButtonStrings[0])
@@ -629,7 +630,154 @@ bool subtractMoney(double subtractAmount) {
     }
 }
 
+#define offsetUsedToFetchPlayerAddress 0x2ba0
+#define addressUsedToFetchPlayerAddress *(uint64_t*)(*(uint64_t*)keyAddress + offsetUsedToFetchPlayerAddress)
+
+//#define getPlayerAddressFunctionOffset 0x1542f0
+//#define getPlayerAddressFunction GetBaseModuleForProcess() + getPlayerAddressFunctionOffset
+//Function created by combining functions brigador.exe+0x1542f0 and brigador.exe+0x16580
+uint64_t getPlayerAddress() {
+    long long* entry = (long long*)addressUsedToFetchPlayerAddress;
+
+    //Check for uninitialized player
+    if ((long long*)addressUsedToFetchPlayerAddress == NULL || (long long**)(*entry + 0x1b8c8) == NULL || (int**)(*entry + 0x1b8f8) == NULL) {
+        return 0;
+    }
+
+    long long* param_1 = *(long long**)(*entry + 0x1b8c8);
+
+    int param_2 = 0;
+    int* param_3 = *(int**)(*entry + 0x1b8f8);
+
+
+    long long lVar1;
+    long long lVar2;
+    unsigned long long uVar3;
+    unsigned long long uVar4;
+
+    uVar3 = (unsigned long long)*param_3;
+    if (*param_3 == param_2) {
+        lVar1 = *param_1;
+        if (uVar3 < (unsigned long long)((param_1[1] - lVar1) / 0x30)) {
+            uVar4 = (unsigned long long)param_3[1];
+            lVar2 = *(long long*)(lVar1 + uVar3 * 0x30);
+            if (((uVar4 < (unsigned long long)(*(long long*)(lVar1 + 8 + uVar3 * 0x30) - lVar2 >> 4)) &&
+                (*(int*)(lVar2 + uVar4 * 0x10) == param_3[2])) &&
+                (*(long long*)(lVar2 + 8 + uVar4 * 0x10) != 0)) {
+                //MessageBoxA(NULL, "Found Player Address", "ALIVE", MB_OK);
+                return *(uint64_t*)(lVar2 + 8 + uVar4 * 0x10);
+            }
+        }
+    }
+    //MessageBoxA(NULL, "Could not find player address", "ALIVE", MB_OK);
+    return 0;
+}
+
+#define getPlayerHealthAddress ((*(uint64_t*)(getPlayerAddress()+0x2b8) + 0x78)+0x4)
+uint64_t getPlayerHealth() {
+    uint64_t playerAddress = getPlayerAddress();
+    if (playerAddress != NULL) {
+        return getPlayerHealthAddress;
+    }
+    return 0;
+}
+
+
+float playerHealthToAdd = 0;
+void handlePlayerHealth() {
+    states currentState = (states)fetchCurrentState;
+    if (playerHealthToAdd > 0 && currentState == InGame) {
+        if (getPlayerHealth() != 0) {
+            *(float*)getPlayerHealthAddress += playerHealthToAdd;
+            playerHealthToAdd = 0;
+        }
+    }
+}
+
 #define upgradeCost 500000
+void handlePressedButton(buttons buttonToHandle) {
+    float refloat;
+    switch (buttonToHandle) {
+    case M_Repair:
+        if (subtractMoney(upgradeCost)) {
+            playerHealthToAdd += 50;
+        }
+        break;
+    case M_PosOvercharge:
+        if (subtractMoney(upgradeCost)) {
+            refloat = reinterpret_cast<float&>(deployedMechOffsetsAndVars[MaxOverchargeIdx].thd);
+            refloat *= 1.1;
+            deployedMechOffsetsAndVars[MaxOverchargeIdx].thd = reinterpret_cast<uint32_t&>(refloat);
+        }
+        break;
+    case M_PosForwardSpeed:
+        if (subtractMoney(upgradeCost)) {
+            refloat = reinterpret_cast<float&>(deployedMechLegsOffsetsAndVars[MaxForwardSpeedIdx].thd);
+            refloat *= 1.1;
+            deployedMechLegsOffsetsAndVars[MaxForwardSpeedIdx].thd = reinterpret_cast<uint32_t&>(refloat);
+        }
+        break;
+    case P_PosCapacity: // Primary: +Capacity
+        if (subtractMoney(upgradeCost)) {
+            deployedPrimaryWeaponOffsetsAndVars[CapacityIdx].thd = (uint32_t)(deployedPrimaryWeaponOffsetsAndVars[CapacityIdx].thd * 1.2);
+        }
+        break;
+    case P_PosFireRate: // Primary: +Fire Rate
+        if (subtractMoney(upgradeCost)) {
+            refloat = reinterpret_cast<float&>(deployedPrimaryWeaponOffsetsAndVars[CooldownIdx].thd);
+            refloat *= 0.9;
+            deployedPrimaryWeaponOffsetsAndVars[CooldownIdx].thd = reinterpret_cast<uint32_t&>(refloat);
+        }
+        break;
+    case P_PosProjectilesNegAccuracy: // Primary: +Projectiles, -Accuracy
+        if (subtractMoney(upgradeCost)) {
+            deployedPrimaryWeaponOffsetsAndVars[ShotCountIdx].thd = (uint32_t)((int)deployedPrimaryWeaponOffsetsAndVars[ShotCountIdx].thd + 1);
+            refloat = reinterpret_cast<float&>(deployedPrimaryWeaponOffsetsAndVars[AccuracyIdx].thd);
+            refloat += 0.017; //1 degree added to guarantee accuracy is degraded even if it was previously 0.
+            refloat *= 1.1;
+            deployedPrimaryWeaponOffsetsAndVars[AccuracyIdx].thd = reinterpret_cast<uint32_t&>(refloat);
+        }
+        break;
+    case P_PosPropMult: // Primary: +Structure Damage
+        if (subtractMoney(upgradeCost)) {
+            refloat = reinterpret_cast<float&>(deployedPrimaryBulletOffsetsAndVars[PropMultIdx].thd);
+            refloat *= 1.1;
+            deployedPrimaryBulletOffsetsAndVars[PropMultIdx].thd = reinterpret_cast<uint32_t&>(refloat);
+        }
+        break;
+    case S_PosCapacity: // Secondary: +Capacity
+        if (subtractMoney(upgradeCost)) {
+            deployedSecondaryWeaponOffsetsAndVars[CapacityIdx].thd = (uint32_t)(deployedSecondaryWeaponOffsetsAndVars[CapacityIdx].thd * 1.2);
+        }
+        break;
+    case S_PosFireRate: // Secondary: +Fire Rate
+        if (subtractMoney(upgradeCost)) {
+            refloat = reinterpret_cast<float&>(deployedSecondaryWeaponOffsetsAndVars[CooldownIdx].thd);
+            refloat *= 0.9;
+            deployedSecondaryWeaponOffsetsAndVars[CooldownIdx].thd = reinterpret_cast<uint32_t&>(refloat);
+        }
+        break;
+    case S_PosProjectilesNegAccuracy: // Secondary: +Projectiles, -Accuracy
+        if (subtractMoney(upgradeCost)) {
+            deployedSecondaryWeaponOffsetsAndVars[ShotCountIdx].thd = (uint32_t)((int)deployedSecondaryWeaponOffsetsAndVars[ShotCountIdx].thd + 1);
+            refloat = reinterpret_cast<float&>(deployedSecondaryWeaponOffsetsAndVars[AccuracyIdx].thd);
+            refloat += 0.017; //1 degree added to guarantee accuracy is degraded even if it was previously 0.
+            refloat *= 1.1;
+            deployedSecondaryWeaponOffsetsAndVars[AccuracyIdx].thd = reinterpret_cast<uint32_t&>(refloat);
+        }
+        break;
+    case S_PosPropMult: // Secondary: +Structure Damage
+        if (subtractMoney(upgradeCost)) {
+            refloat = reinterpret_cast<float&>(deployedSecondaryBulletOffsetsAndVars[PropMultIdx].thd);
+            refloat *= 1.1;
+            deployedSecondaryBulletOffsetsAndVars[PropMultIdx].thd = reinterpret_cast<uint32_t&>(refloat);
+        }
+        break;
+    default:
+        MessageBoxA(NULL, "Error: Undefined button pressed. ", "ALIVE", MB_OK);
+        break;
+    }
+}
 
 #define districtItemSize 0x2110
 
@@ -637,6 +785,9 @@ bool subtractMoney(double subtractAmount) {
 void handleChooseDistrictMenu() {
     if (addButtonsChooseDistrict.isDeployed) {
         _SetOtherThreadsSuspended(true);
+
+        //Update playerHealth to the modded value
+        handlePlayerHealth();
 
         //Reset modded weapon vars if changes to weapon addresses or certain states are observed.
         resetWeaponVars();
@@ -664,88 +815,25 @@ void handleChooseDistrictMenu() {
             }
             buttons buttonToHandle = (buttons)(distanceFromOriginalItem - 1);
 
-            float refloat;
-            switch (buttonToHandle) {
-            case M_PosOvercharge:
-                if (subtractMoney(upgradeCost)) {
-                    refloat = reinterpret_cast<float&>(deployedMechOffsetsAndVars[MaxOverchargeIdx].thd);
-                    refloat *= 1.1;
-                    deployedMechOffsetsAndVars[MaxOverchargeIdx].thd = reinterpret_cast<uint32_t&>(refloat);
-                }
-                break;
-            case M_PosForwardSpeed:
-                if (subtractMoney(upgradeCost)) {
-                    refloat = reinterpret_cast<float&>(deployedMechLegsOffsetsAndVars[MaxForwardSpeedIdx].thd);
-                    refloat *= 1.1;
-                    deployedMechLegsOffsetsAndVars[MaxForwardSpeedIdx].thd = reinterpret_cast<uint32_t&>(refloat);
-                }
-                break;
-            case P_PosCapacity: // Primary: +Capacity
-                if (subtractMoney(upgradeCost)) {
-                    deployedPrimaryWeaponOffsetsAndVars[CapacityIdx].thd = (uint32_t)(deployedPrimaryWeaponOffsetsAndVars[CapacityIdx].thd * 1.2);
-                }
-                break;
-            case P_PosFireRate: // Primary: +Fire Rate
-                if (subtractMoney(upgradeCost)) {
-                    refloat = reinterpret_cast<float&>(deployedPrimaryWeaponOffsetsAndVars[CooldownIdx].thd);
-                    refloat *= 0.9;
-                    deployedPrimaryWeaponOffsetsAndVars[CooldownIdx].thd = reinterpret_cast<uint32_t&>(refloat);
-                }
-                break;
-            case P_PosProjectilesNegAccuracy : // Primary: +Projectiles, -Accuracy
-                if (subtractMoney(upgradeCost)) {
-                    deployedPrimaryWeaponOffsetsAndVars[ShotCountIdx].thd = (uint32_t)((int)deployedPrimaryWeaponOffsetsAndVars[ShotCountIdx].thd + 1);
-                    refloat = reinterpret_cast<float&>(deployedPrimaryWeaponOffsetsAndVars[AccuracyIdx].thd);
-                    refloat += 0.017; //1 degree added to guarantee accuracy is degraded even if it was previously 0.
-                    refloat *= 1.1;
-                    deployedPrimaryWeaponOffsetsAndVars[AccuracyIdx].thd = reinterpret_cast<uint32_t&>(refloat);
-                }
-                break;
-            case P_PosPropMult: // Primary: +Structure Damage
-                if (subtractMoney(upgradeCost)) {
-                    refloat = reinterpret_cast<float&>(deployedPrimaryBulletOffsetsAndVars[PropMultIdx].thd);
-                    refloat *= 1.1;
-                    deployedPrimaryBulletOffsetsAndVars[PropMultIdx].thd = reinterpret_cast<uint32_t&>(refloat);
-                }
-                break;
-            case S_PosCapacity: // Secondary: +Capacity
-                if (subtractMoney(upgradeCost)) {
-                    deployedSecondaryWeaponOffsetsAndVars[CapacityIdx].thd = (uint32_t)(deployedSecondaryWeaponOffsetsAndVars[CapacityIdx].thd * 1.2);
-                }
-                break;
-            case S_PosFireRate: // Secondary: +Fire Rate
-                if (subtractMoney(upgradeCost)) {
-                    refloat = reinterpret_cast<float&>(deployedSecondaryWeaponOffsetsAndVars[CooldownIdx].thd);
-                    refloat *= 0.9;
-                    deployedSecondaryWeaponOffsetsAndVars[CooldownIdx].thd = reinterpret_cast<uint32_t&>(refloat);
-                }
-                break;
-            case S_PosProjectilesNegAccuracy: // Secondary: +Projectiles, -Accuracy
-                if (subtractMoney(upgradeCost)) {
-                    deployedSecondaryWeaponOffsetsAndVars[ShotCountIdx].thd = (uint32_t)((int)deployedSecondaryWeaponOffsetsAndVars[ShotCountIdx].thd + 1);
-                    refloat = reinterpret_cast<float&>(deployedSecondaryWeaponOffsetsAndVars[AccuracyIdx].thd);
-                    refloat += 0.017; //1 degree added to guarantee accuracy is degraded even if it was previously 0.
-                    refloat *= 1.1;
-                    deployedSecondaryWeaponOffsetsAndVars[AccuracyIdx].thd = reinterpret_cast<uint32_t&>(refloat);
-                }
-                break;
-            case S_PosPropMult: // Secondary: +Structure Damage
-                if (subtractMoney(upgradeCost)) {
-                    refloat = reinterpret_cast<float&>(deployedSecondaryBulletOffsetsAndVars[PropMultIdx].thd);
-                    refloat *= 1.1;
-                    deployedSecondaryBulletOffsetsAndVars[PropMultIdx].thd = reinterpret_cast<uint32_t&>(refloat);
-                }
-                break;
-            default:
-                MessageBoxA(NULL, "Error: Undefined button pressed. ", "ALIVE", MB_OK);
-                break;
-            }
+            handlePressedButton(buttonToHandle);
+            
             setWeaponVars();
             memset((void*)chooseDistrictMenuStruct, 0x0 & 0xffff, 2);
 
         }
-        /*
+        
         if (GetAsyncKeyState(VK_NUMPAD1) & 0x80000) {
+            snprintf(buffer, 100, "playerAddress = %#016x", getPlayerAddress());
+            MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+            if (getPlayerHealth() != 0) {
+                snprintf(buffer, 100, "playerHealthAddress = %#016x", getPlayerHealthAddress);
+                MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+                snprintf(buffer, 100, "playerHealth = %f", *(float*)getPlayerHealthAddress);
+                MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+                *(float*)getPlayerHealthAddress += 100;
+            }
+
+            /*
             //Execute present function in brigador.exe to get the correct money value. 
             typedef double function(uint64_t);
             uint64_t functionAddress = GetBaseModuleForProcess() + 0x595a0;
@@ -764,8 +852,9 @@ void handleChooseDistrictMenu() {
                 snprintf(buffer, 100, "%#016x, %#016x, %#016x", selectedDistrictItemAddress, *(uint64_t*)selectedDistrictItemAddress, chooseDistrictMenuIndex);
                 MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
             }  
+            */
         }
-        */
+        
         _SetOtherThreadsSuspended(false);
     }
     return;
