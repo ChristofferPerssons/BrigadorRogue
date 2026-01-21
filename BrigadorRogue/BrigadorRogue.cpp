@@ -233,10 +233,10 @@ void deployExecutableASM(struct asmHook *asms) {
     return;
 }
 
-void writeByteToDeployedAsm(struct asmHook *asms, unsigned char input, uint64_t index) {
+void writeBytesToDeployedAsm(struct asmHook *asms, uint64_t input, uint64_t index, unsigned char bytes) {
     _SetOtherThreadsSuspended(true);
     uint64_t asmSize = asms->fileSize - asms->bytesToStrip;
-    memset((void*)(asms->hookTarget + asmSize - asms->numberOfWritableBytes + index), input, 1);
+    memcpy((void*)(asms->hookTarget + asmSize - asms->numberOfWritableBytes + index), &input, bytes);
     _SetOtherThreadsSuspended(false);
     return;
 }
@@ -319,48 +319,9 @@ struct upgrades {
 
 upgrades upgradeList;
 
-//Repair is set to always be available
+//Repair is set to always show up
 #define alwaysAvailableUpgradeCount 1
 buttons alwaysAvailableUpgradesButtons[alwaysAvailableUpgradeCount] = { M_Repair };
-
-
-bool shouldRandomizeUpgrades = true;
-
-std::random_device rd;  // a seed source for the random number engine
-std::mt19937 gen(rd()); // mersenne_twister_engine seeded with rd()
-std::uniform_int_distribution<> distrib(0, addedButtons-1);
-
-void setupUpgradeList(){
-    if (shouldRandomizeUpgrades && fetchCurrentState == FreelancerChooseDistrict) {
-        //Setup always available upgrades
-        for (int n = 0; n < alwaysAvailableUpgradeCount; n++) {
-            upgradeList.buttonIndex[n] = alwaysAvailableUpgradesButtons[n];
-            upgradeList.upgradeText[n] = (char*)addedButtonStrings[alwaysAvailableUpgradesButtons[n]];
-        }
-
-        //Generate unique random numbers and setup upgradeList
-        for (int n = alwaysAvailableUpgradeCount; n < upgradeSelectionCount; n++) {
-            upgradeList.buttonIndex[n] = (buttons)distrib(gen);
-            upgradeList.upgradeText[n] = (char*)addedButtonStrings[upgradeList.buttonIndex[n]];
-            //Ensure the number is unique
-            bool unique = true;
-            for (int i = n-1; i > -1; i--) {
-                if (upgradeList.buttonIndex[n] == upgradeList.buttonIndex[i]) {
-                    unique = false;
-                    break;
-                }
-            }
-            if (!unique) {
-                n--;
-            }
-        }
-        shouldRandomizeUpgrades = false;
-    }
-    else if (!shouldRandomizeUpgrades && fetchCurrentState != FreelancerChooseDistrict) {
-        shouldRandomizeUpgrades = true;
-    }
-}
-
 
 asmHook addButtonsChooseDistrict {
     "addButtonsChooseDistrictV3",
@@ -374,7 +335,7 @@ asmHook addButtonsChooseDistrict {
     { {132} },
     { {0x68d12} }, // True loop start at 0x68d12
     { {270}, {278} }, //stringArrayAddres, buttonsToAdd
-    { {(uint64_t)upgradeList.upgradeText}, {upgradeSelectionCount} }
+    { {(uint64_t)upgradeList.upgradeText}, {0} }
 };
 
 // Uses set string in createUIButtonChooseDistrictOrupdateSomeUI2 from addButtonsChooseDistrict if it is not null
@@ -652,10 +613,32 @@ void resetWeaponVars(){
     } 
 }
 
+#define moneyBase GetBaseModuleForProcess() + 0x4fdea0
+
+double getMoney() {
+    double* dVar2 = (double*)(moneyBase + 0xa4b8);
+    double* dVar1 = (double*)(moneyBase + 0xa4c0);
+    if (*dVar2 <= 0.0) {
+        *dVar2 = 0.0;
+    }
+    double* dVar4 = (double*)(moneyBase + 0xa4c8);
+    if (*dVar1 <= 0.0) {
+        *dVar1 = 0.0;
+    }
+    if (*dVar4 <= 0.0) {
+        *dVar4 = 0.0;
+    }
+    double* dVar3 = (double*)(moneyBase + 0xa4d0);
+    if (*dVar3 <= 0.0) {
+        *dVar3 = 0.0;
+    }
+
+    return *dVar1 + *dVar2 + *dVar4 + *dVar3;
+}
+
+
 //Returns True on valid and successful subtraction of in run money.
 bool subtractMoney(double subtractAmount) {
-    uint64_t moneyBase = GetBaseModuleForProcess() + 0x4fdea0;
-
     double* dVar2 = (double*)(moneyBase + 0xa4b8);
     double* dVar1 = (double*)(moneyBase + 0xa4c0);
     if (*dVar2 <= 0.0) {
@@ -780,12 +763,58 @@ void handlePlayerHealth() {
     }
 }
 
-#define upgradeCost 000000
+#define upgradesPerLevel 3
+uint64_t consumedUpgrades = 0;
+bool shouldRandomizeUpgrades = true;
+
+std::random_device rd;  // a seed source for the random number engine
+std::mt19937 gen(rd()); // mersenne_twister_engine seeded with rd()
+std::uniform_int_distribution<> distrib(0, addedButtons - 1);
+
+void setupUpgradeList() {
+    if (shouldRandomizeUpgrades && fetchCurrentState == FreelancerChooseDistrict) {
+        //Setup always available upgrades
+        for (int n = 0; n < alwaysAvailableUpgradeCount; n++) {
+            upgradeList.buttonIndex[n] = alwaysAvailableUpgradesButtons[n];
+            upgradeList.upgradeText[n] = (char*)addedButtonStrings[alwaysAvailableUpgradesButtons[n]];
+        }
+
+        //Generate unique random numbers and setup upgradeList
+        for (int n = alwaysAvailableUpgradeCount; n < upgradeSelectionCount; n++) {
+            upgradeList.buttonIndex[n] = (buttons)distrib(gen);
+            upgradeList.upgradeText[n] = (char*)addedButtonStrings[upgradeList.buttonIndex[n]];
+            //Ensure the number is unique
+            bool unique = true;
+            for (int i = n - 1; i > -1; i--) {
+                if (upgradeList.buttonIndex[n] == upgradeList.buttonIndex[i]) {
+                    unique = false;
+                    break;
+                }
+            }
+            if (!unique) {
+                n--;
+            }
+        }
+        shouldRandomizeUpgrades = false;
+        consumedUpgrades = 0;
+        writeBytesToDeployedAsm(&addButtonsChooseDistrict, upgradeSelectionCount, 10, 8);
+    }
+    else if (!shouldRandomizeUpgrades && fetchCurrentState != FreelancerChooseDistrict) {
+        shouldRandomizeUpgrades = true;
+    }
+}
+
+#define repairCost  010000*consumedUpgrades*10
+#define upgradeCost 025000*consumedUpgrades*10
+//#define repairCost  000000*consumedUpgrades*10
+//#define upgradeCost 000000*consumedUpgrades*10
+
+
 void handlePressedButton(buttons buttonToHandle) {
     float refloat;
     switch (buttonToHandle) {
     case M_Repair:
-        if (subtractMoney(upgradeCost)) {
+        if (subtractMoney(repairCost)) {
             playerHealthToAdd += 50;
         }
         break;
@@ -861,7 +890,20 @@ void handlePressedButton(buttons buttonToHandle) {
         break;
     default:
         MessageBoxA(NULL, "Error: Undefined button pressed. ", "ALIVE", MB_OK);
-        break;
+        return;
+    }
+
+    consumedUpgrades++;
+
+    /*
+    if (upgradesPerLevel <= consumedUpgrades) {
+        writeBytesToDeployedAsm(&addButtonsChooseDistrict, 0, 10, 8);
+    }
+    */    
+
+    double currentMoney = getMoney();
+    if (currentMoney < repairCost && currentMoney < upgradeCost) {
+        writeBytesToDeployedAsm(&addButtonsChooseDistrict, 0, 10, 8);
     }
 }
 
