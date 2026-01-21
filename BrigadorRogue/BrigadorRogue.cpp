@@ -16,7 +16,7 @@ using namespace std;
 const enum states {
     MainMenu = 0x2,
     Campaign = 0x3,
-    Freelance = 0x4,
+    Freelancer = 0x4,
     Aquisitions = 0x5,
     Settings = 0x7, 
     Credits = 0x6,
@@ -442,6 +442,30 @@ uthruple deployedSecondaryBulletOffsetsAndVars[] = {
 };
 #define secondaryBulletVars sizeof(deployedSecondaryBulletOffsetsAndVars) / sizeof(deployedSecondaryBulletOffsetsAndVars[0])
 
+
+const enum ammoTypes {
+    None = 0x0,
+    Bullet = 0x1,
+    Artillery = 0x2,
+    Flame = 0x4,
+    Laser = 0x8,
+    Cannon = 0x10,
+    Smoke = 0x20,
+    EMP = 0x40
+};
+
+#define ammoTypeOffset 0x48c
+#define fetchDeployedPrimaryAmmoTypeAddress  (unsigned char*)(*(uint64_t*)(*(uint64_t*)keyAddress + primaryWeaponOffset)+ammoTypeOffset)
+#define fetchDeployedSecondaryAmmoTypeAddress  (unsigned char*)(*(uint64_t*)(*(uint64_t*)keyAddress + secondaryWeaponOffset)+ammoTypeOffset)
+
+bool ammoTypeHasBullet(unsigned char* ammoTypeAddress) {
+    ammoTypes ammoType = (ammoTypes)*ammoTypeAddress;
+    if (ammoType == Bullet || ammoType == Artillery || ammoType == Cannon) {
+        return true;
+    }
+    return false;
+}
+
 //Copies stored weapon var values to game memory
 void setWeaponVars() {
     char buffer[256];
@@ -460,15 +484,20 @@ void setWeaponVars() {
     for (int i = 0; i < secondaryWeaponVars; i++) {
         *(uint32_t*)(deployedSecondaryWeaponAddress + deployedSecondaryWeaponOffsetsAndVars[i].fst) = deployedSecondaryWeaponOffsetsAndVars[i].thd;
     }
-    for (int i = 0; i < primaryBulletVars; i++) {
-        *(uint32_t*)(deployedPrimaryBulletAddress + deployedPrimaryBulletOffsetsAndVars[i].fst) = deployedPrimaryBulletOffsetsAndVars[i].thd;
+    if (ammoTypeHasBullet(fetchDeployedPrimaryAmmoTypeAddress)) {
+        for (int i = 0; i < primaryBulletVars; i++) {
+            *(uint32_t*)(deployedPrimaryBulletAddress + deployedPrimaryBulletOffsetsAndVars[i].fst) = deployedPrimaryBulletOffsetsAndVars[i].thd;
+        }
     }
-    for (int i = 0; i < secondaryBulletVars; i++) {
-        *(uint32_t*)(deployedSecondaryBulletAddress + deployedSecondaryBulletOffsetsAndVars[i].fst) = deployedSecondaryBulletOffsetsAndVars[i].thd;
+    if (ammoTypeHasBullet(fetchDeployedSecondaryAmmoTypeAddress)) {
+        for (int i = 0; i < secondaryBulletVars; i++) {
+            *(uint32_t*)(deployedSecondaryBulletAddress + deployedSecondaryBulletOffsetsAndVars[i].fst) = deployedSecondaryBulletOffsetsAndVars[i].thd;
+        }
     }
 }
 
-#define fetchCurrentState *(uint32_t*)(*(uint64_t*)(*(uint64_t*)keyAddress + 0x2918) + 0x4)
+#define stateStructOffset 0x2918
+#define fetchCurrentState (states)*(uint32_t*)(*(uint64_t*)(*(uint64_t*)keyAddress + stateStructOffset) + 0x4)
 
 //Resets weapon var structs in case of weapon change or game state is in a menu where upgrades should reset
 void resetWeaponVars(){
@@ -482,11 +511,11 @@ void resetWeaponVars(){
     uint64_t curDeployedPrimaryBulletAddress = fetchDeployedPrimaryBulletAddress;
     uint64_t curDeployedSecondaryBulletAddress = fetchDeployedSecondaryBulletAddress;
 
-    states currentState = (states)fetchCurrentState;
+    states currentState = fetchCurrentState;
     bool shouldReset = (
         currentState == MainMenu || 
         currentState == Campaign || 
-        currentState == Freelance || 
+        currentState == Freelancer || 
         currentState == Aquisitions || 
         currentState == LoseScreen
         );
@@ -541,28 +570,32 @@ void resetWeaponVars(){
     }
 
     //Reset Primary Bullet Vars and set new defaults
-    if (curDeployedPrimaryBulletAddress != deployedPrimaryBulletAddress) {
-        for (int i = 0; i < primaryBulletVars; i++) {
-            if (deployedPrimaryBulletAddress != NULL) {
-                *(uint32_t*)(deployedPrimaryBulletAddress + deployedPrimaryBulletOffsetsAndVars[i].fst) = deployedPrimaryBulletOffsetsAndVars[i].snd;
+    if (ammoTypeHasBullet(fetchDeployedPrimaryAmmoTypeAddress)) {
+        if (curDeployedPrimaryBulletAddress != deployedPrimaryBulletAddress) {
+            for (int i = 0; i < primaryBulletVars; i++) {
+                if (deployedPrimaryBulletAddress != NULL) {
+                    *(uint32_t*)(deployedPrimaryBulletAddress + deployedPrimaryBulletOffsetsAndVars[i].fst) = deployedPrimaryBulletOffsetsAndVars[i].snd;
+                }
+                deployedPrimaryBulletOffsetsAndVars[i].snd = *(uint32_t*)(curDeployedPrimaryBulletAddress + deployedPrimaryBulletOffsetsAndVars[i].fst);
+                deployedPrimaryBulletOffsetsAndVars[i].thd = deployedPrimaryBulletOffsetsAndVars[i].snd;
             }
-            deployedPrimaryBulletOffsetsAndVars[i].snd = *(uint32_t*)(curDeployedPrimaryBulletAddress + deployedPrimaryBulletOffsetsAndVars[i].fst);
-            deployedPrimaryBulletOffsetsAndVars[i].thd = deployedPrimaryBulletOffsetsAndVars[i].snd;
+            deployedPrimaryBulletAddress = curDeployedPrimaryBulletAddress;
         }
-        deployedPrimaryBulletAddress = curDeployedPrimaryBulletAddress;
     }
 
     //Reset Secondary Bullet Vars and set new defaults
-    if (curDeployedSecondaryBulletAddress != deployedSecondaryBulletAddress) {
-        for (int i = 0; i < secondaryBulletVars; i++) {
-            if (deployedSecondaryBulletAddress != NULL) {
-                *(uint32_t*)(deployedSecondaryBulletAddress + deployedSecondaryBulletOffsetsAndVars[i].fst) = deployedSecondaryBulletOffsetsAndVars[i].snd;
+    if (ammoTypeHasBullet(fetchDeployedSecondaryAmmoTypeAddress)) {
+        if (curDeployedSecondaryBulletAddress != deployedSecondaryBulletAddress) {
+            for (int i = 0; i < secondaryBulletVars; i++) {
+                if (deployedSecondaryBulletAddress != NULL) {
+                    *(uint32_t*)(deployedSecondaryBulletAddress + deployedSecondaryBulletOffsetsAndVars[i].fst) = deployedSecondaryBulletOffsetsAndVars[i].snd;
+                }
+                deployedSecondaryBulletOffsetsAndVars[i].snd = *(uint32_t*)(curDeployedSecondaryBulletAddress + deployedSecondaryBulletOffsetsAndVars[i].fst);
+                deployedSecondaryBulletOffsetsAndVars[i].thd = deployedSecondaryBulletOffsetsAndVars[i].snd;
             }
-            deployedSecondaryBulletOffsetsAndVars[i].snd = *(uint32_t*)(curDeployedSecondaryBulletAddress + deployedSecondaryBulletOffsetsAndVars[i].fst);
-            deployedSecondaryBulletOffsetsAndVars[i].thd = deployedSecondaryBulletOffsetsAndVars[i].snd;
+            deployedSecondaryBulletAddress = curDeployedSecondaryBulletAddress;
         }
-        deployedSecondaryBulletAddress = curDeployedSecondaryBulletAddress;
-    }
+    } 
 }
 
 //Returns True on valid and successful subtraction of in run money.
@@ -685,8 +718,7 @@ uint64_t getPlayerHealth() {
 
 float playerHealthToAdd = 0;
 void handlePlayerHealth() {
-    states currentState = (states)fetchCurrentState;
-    if (playerHealthToAdd > 0 && currentState == InGame) {
+    if (playerHealthToAdd > 0 && fetchCurrentState == InGame) {
         if (getPlayerHealth() != 0) {
             *(float*)getPlayerHealthAddress += playerHealthToAdd;
             playerHealthToAdd = 0;
@@ -694,7 +726,7 @@ void handlePlayerHealth() {
     }
 }
 
-#define upgradeCost 500000
+#define upgradeCost 000000
 void handlePressedButton(buttons buttonToHandle) {
     float refloat;
     switch (buttonToHandle) {
@@ -783,25 +815,16 @@ void handlePressedButton(buttons buttonToHandle) {
 
 //Handles a player's action on the choose district menu in freelancer by observing the state of the currently selected button
 void handleChooseDistrictMenu() {
-    if (addButtonsChooseDistrict.isDeployed) {
-        _SetOtherThreadsSuspended(true);
-
-        //Update playerHealth to the modded value
-        handlePlayerHealth();
-
-        //Reset modded weapon vars if changes to weapon addresses or certain states are observed.
-        resetWeaponVars();
-
+    if (addButtonsChooseDistrict.isDeployed && fetchCurrentState == FreelancerChooseDistrict) {
         char buffer[256];
 
-        uint64_t chooseDistrictMenuStruct = (*(uint64_t*)(*(uint64_t*)keyAddress + 0x2918) + 0x128 + 0x3e * 0x88);
+        uint64_t chooseDistrictMenuStruct = (*(uint64_t*)(*(uint64_t*)keyAddress + stateStructOffset) + 0x128 + 0x3e * 0x88);
         uint32_t chooseDistrictMenuIndex = (*(uint32_t*)chooseDistrictMenuStruct) & 0xffff;   
 
-        //Fetch which modded button is pressed and should be handled
-        uint64_t selectedDistrictItemAddress = *(uint64_t*)(*(uint64_t*)(*(uint64_t*)keyAddress + 0x2918) + 0x128 + (0x3e * 0x88) + 0x18);
-        //int buttonToHandle = -1;
+        //Fetch which button is selected and should be handled
+        uint64_t selectedDistrictItemAddress = *(uint64_t*)(*(uint64_t*)(*(uint64_t*)keyAddress + stateStructOffset) + 0x128 + (0x3e * 0x88) + 0x18);
 
-        //Unknown (and therefore explicitly injected) button handling
+        //Unknown (and therefore explicitly injected/ modded) button handling
         if (selectedDistrictItemAddress != NULL && *(uint64_t*)selectedDistrictItemAddress == NULL) {
             //Find closest original item in district button array to conclude which added
             // button is pressed and should be handled. Done by going backwards from selected 
@@ -815,14 +838,99 @@ void handleChooseDistrictMenu() {
             }
             buttons buttonToHandle = (buttons)(distanceFromOriginalItem - 1);
 
+            //Handle the pressed mod button
             handlePressedButton(buttonToHandle);
             
+            //Update weapon vars in memory
             setWeaponVars();
-            memset((void*)chooseDistrictMenuStruct, 0x0 & 0xffff, 2);
 
-        }
-        
+            //Reset selected button to index 0 
+            memset((void*)chooseDistrictMenuStruct, 0x0, 2);
+        } 
+    }
+    return;
+}
+
+#define fetchFreelancerSelectedMechAddress (*(uint64_t*)(*(uint64_t*)keyAddress+stateStructOffset)+0x128+0x18+(0x35*0x88))
+#define fetchFreelancerSelectedPrimaryWeaponAddress (*(uint64_t*)(*(uint64_t*)keyAddress+stateStructOffset)+0x128+0x18+(0x36*0x88))
+#define fetchFreelancerSelectedSecondaryWeaponAddress (*(uint64_t*)(*(uint64_t*)keyAddress+stateStructOffset)+0x128+0x18+(0x37*0x88))
+
+const enum freelancerMenuStates {
+    Pilot,
+    Vehicle,
+    Primary,
+    Secondary,
+    Special,
+    Operation
+};
+
+//Both of these paths are the same but using the one that is more similar to fetchFreelancerSelectedMechAddress
+//#define fetchFreelancerMenuState (freelancerMenuStates)*(uint32_t*)(0x1b18+(*(uint64_t*)(*(uint64_t*)keyAddress + stateStructOffset))+0x128)
+#define fetchFreelancerMenuState (freelancerMenuStates)*(uint32_t*)(*(uint64_t*)(*(uint64_t*)keyAddress + stateStructOffset) + 0x128 + (0x33 * 0x88))
+
+/* DOES NOT WORK
+#define mechResourceBytes 4632
+static unsigned char mechResource[mechResourceBytes];
+
+//Weapon types differ in size. Max seems to be laser weapons at 1608 bytes
+#define maxWeaponResourceBytes 1608
+unsigned char primaryWeaponResource[maxWeaponResourceBytes];
+unsigned char secondaryWeaponResource[maxWeaponResourceBytes];
+
+bool shouldCreateDummy = true;
+void handleFreelancerMenu() {
+    if (fetchCurrentState != Freelancer) {
+        shouldCreateDummy = true;
+        return;     
+    }
+
+    char buffer[256];
+
+    //Create dummy resources by copying selected resources and alter pointers to point to these instead.
+    // This creates some distinction between general resources and a resource the player is deployed with.
+    // This allows, for example, upgrading of the same weapon in primary and secondary slots separately.
+    //Currently only handles Mech, Primary, Secondary. Resources pointed to within these copied resources
+    // (like the bullet resource for weapons) are not handled currently, meaning the subresources are still
+    // considered general and are not distinct 
+    if (fetchFreelancerMenuState == Operation) {
+
+        snprintf(buffer, 100, "*fetchFreelancerSelectedPrimaryWeaponAddress = %llx", *(uint64_t**)fetchFreelancerSelectedPrimaryWeaponAddress);
+        MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+
+        //Handle Mech Resource
+        memcpy(primaryWeaponResource, *(uint64_t**)fetchFreelancerSelectedPrimaryWeaponAddress, maxWeaponResourceBytes);
+        *(uint64_t*)fetchFreelancerSelectedPrimaryWeaponAddress = (uint64_t)mechResource;
+        snprintf(buffer, 100, "*fetchFreelancerSelectedPrimaryWeaponAddress = %llx", *(uint64_t**)fetchFreelancerSelectedPrimaryWeaponAddress);
+        MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+        //Handle Primary Weapon Resource
+
+        //Handle Secondary Weapon Resource
+
+        shouldCreateDummy = false;
+    }
+    else {
+        shouldCreateDummy = true;
+    }
+}
+*/
+
+DWORD WINAPI MainThread(LPVOID param) {
+    char buffer[256];
+    while (true) {
+        _SetOtherThreadsSuspended(true);
+
+        /*
         if (GetAsyncKeyState(VK_NUMPAD1) & 0x80000) {
+            //MessageBoxA(NULL, "State change", "State change", MB_OK);
+            if (setState.isDeployed != 0) {
+                writeByteToDeployedAsm(&setState, 0xE, 0);//Ingame
+            }
+        }
+        */
+
+        if (GetAsyncKeyState(VK_NUMPAD1) & 0x80000) {
+            snprintf(buffer, 100, "freelancerMenuState = %llx", (uint32_t)fetchFreelancerMenuState);
+            MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
             snprintf(buffer, 100, "playerAddress = %#016x", getPlayerAddress());
             MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
             if (getPlayerHealth() != 0) {
@@ -834,7 +942,7 @@ void handleChooseDistrictMenu() {
             }
 
             /*
-            //Execute present function in brigador.exe to get the correct money value. 
+            //Execute present function in brigador.exe to get the correct money value.
             typedef double function(uint64_t);
             uint64_t functionAddress = GetBaseModuleForProcess() + 0x595a0;
             double (*getMoney)(uint64_t) = (function*)(functionAddress);
@@ -851,70 +959,25 @@ void handleChooseDistrictMenu() {
             if (selectedDistrictItemAddress != NULL) {
                 snprintf(buffer, 100, "%#016x, %#016x, %#016x", selectedDistrictItemAddress, *(uint64_t*)selectedDistrictItemAddress, chooseDistrictMenuIndex);
                 MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
-            }  
+            }
             */
         }
-        
-        _SetOtherThreadsSuspended(false);
-    }
-    return;
-}
 
-DWORD WINAPI MainThread(LPVOID param) {
-    while (true) {
-        /*
-        if (GetAsyncKeyState(VK_NUMPAD1) & 0x80000) {
-            //MessageBoxA(NULL, "State change", "State change", MB_OK);
-            if (setState.isDeployed != 0) {
-                writeByteToDeployedAsm(&setState, 0xE, 0);//Ingame
-            }
-        }
-        if (GetAsyncKeyState(VK_NUMPAD2) & 0x80000) {
-            //MessageBoxA(NULL, "State change", "State change", MB_OK);
-            if (setState.isDeployed != 0) {
-                writeByteToDeployedAsm(&setState, 4, 0); //Freelance
-            }
-        }
-        if (GetAsyncKeyState(VK_NUMPAD3) & 0x80000) {
-            //MessageBoxA(NULL, "State change", "State change", MB_OK);
-            if (setState.isDeployed != 0) {
-                writeByteToDeployedAsm(&setState, 0xC, 0);//ChooseDistrict
-            }
-        }
-        if (GetAsyncKeyState(VK_NUMPAD4) & 0x80000) {
-            //MessageBoxA(NULL, "State change", "State change", MB_OK);
-            if (setState.isDeployed != 0) {
-                writeByteToDeployedAsm(&setState, 4, 0);
-            }
-        }
-        if (GetAsyncKeyState(VK_NUMPAD5) & 0x80000) {
-            //MessageBoxA(NULL, "State change", "State change", MB_OK);
-            if (setState.isDeployed != 0) {
-                writeByteToDeployedAsm(&setState, 5, 0);
-            }
-        }
-        if (GetAsyncKeyState(VK_NUMPAD6) & 0x80000) {
-            //MessageBoxA(NULL, "State change", "State change", MB_OK);
-            if (setState.isDeployed != 0) {
-                writeByteToDeployedAsm(&setState, 6, 0);
-            }
-        }
-        if (GetAsyncKeyState(VK_NUMPAD7) & 0x80000) {
-            //MessageBoxA(NULL, "State change", "State change", MB_OK);
-            if (addButtonsChooseDistrict.isDeployed != 0) {
-                writeByteToDeployedAsm(&setState, 7, 0);
-            }
-        }
-        if (GetAsyncKeyState(VK_NUMPAD8) & 0x80000) {
-            MessageBoxA(NULL, "ALIVE", "ALIVE", MB_OK);
-            //if (setState.isDeployed != 0) {
-            //    writeByteToDeployedAsm(&setState, 8, 0);
-            //}
-        }
-        */
+        //Update playerHealth to the modded value
+        handlePlayerHealth();
+
+        //Reset modded weapon vars if changes to weapon addresses or certain game states are observed.
+        resetWeaponVars();
+
+        //Handle logic in freelancer menu
+        //handleFreelancerMenu();
+
+        //Handle logic in freelancer choose district menu
         handleChooseDistrictMenu();
-        Sleep(100);
 
+        _SetOtherThreadsSuspended(false);
+
+        Sleep(100);
     }
 }
 
