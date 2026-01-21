@@ -10,8 +10,14 @@
 #include <cstdio>
 #include <stdint.h>
 #include <Psapi.h>
+#include <random>
 
 using namespace std;
+
+//During the game loop the value of Base+RootOffset is often contained within r14. 
+// This value is the key to finding pointer paths. Most (if not all) paths begin with this value.
+#define rootOffset 0x4fdc18
+#define keyAddress (GetBaseModuleForProcess() + rootOffset)
 
 const enum states {
     MainMenu = 0x2,
@@ -28,6 +34,9 @@ const enum states {
     FreelancerChooseDistrict = 0xC, 
     LoseScreen = 0x0B
 };
+
+#define stateStructOffset 0x2918
+#define fetchCurrentState (states)*(uint32_t*)(*(uint64_t*)(*(uint64_t*)keyAddress + stateStructOffset) + 0x4)
 
 #define MAX_PATCH_SIZE 1024
 
@@ -290,15 +299,68 @@ const char* addedButtonStrings[] = {
     , {"Mech: +Forward Speed"}
     , {"Primary: +Capacity"}
     , {"Primary: +Fire Rate"} 
-    , {"Primary: +Projectiles, -Accuracy"}
+    , {"Primary: +Projectiles -Accuracy"}
     , {"Primary: +Structure Damage"}
     , {"Secondary: +Capacity"}
     , {"Secondary: +Fire Rate"} 
-    , {"Secondary: +Projectiles, -Accuracy"}
+    , {"Secondary: +Projectiles -Accuracy"}
     , {"Secondary: +Structure Damage"}
 };
 
 #define addedButtons sizeof(addedButtonStrings) / sizeof(addedButtonStrings[0])
+
+
+#define upgradeSelectionCount 3
+
+struct upgrades {
+    char* upgradeText[upgradeSelectionCount];
+    buttons buttonIndex[upgradeSelectionCount];
+};
+
+upgrades upgradeList;
+
+//Repair is set to always be available
+#define alwaysAvailableUpgradeCount 1
+buttons alwaysAvailableUpgradesButtons[alwaysAvailableUpgradeCount] = { M_Repair };
+
+
+bool shouldRandomizeUpgrades = true;
+
+std::random_device rd;  // a seed source for the random number engine
+std::mt19937 gen(rd()); // mersenne_twister_engine seeded with rd()
+std::uniform_int_distribution<> distrib(0, addedButtons-1);
+
+void setupUpgradeList(){
+    if (shouldRandomizeUpgrades && fetchCurrentState == FreelancerChooseDistrict) {
+        //Setup always available upgrades
+        for (int n = 0; n < alwaysAvailableUpgradeCount; n++) {
+            upgradeList.buttonIndex[n] = alwaysAvailableUpgradesButtons[n];
+            upgradeList.upgradeText[n] = (char*)addedButtonStrings[alwaysAvailableUpgradesButtons[n]];
+        }
+
+        //Generate unique random numbers and setup upgradeList
+        for (int n = alwaysAvailableUpgradeCount; n < upgradeSelectionCount; n++) {
+            upgradeList.buttonIndex[n] = (buttons)distrib(gen);
+            upgradeList.upgradeText[n] = (char*)addedButtonStrings[upgradeList.buttonIndex[n]];
+            //Ensure the number is unique
+            bool unique = true;
+            for (int i = n-1; i > -1; i--) {
+                if (upgradeList.buttonIndex[n] == upgradeList.buttonIndex[i]) {
+                    unique = false;
+                    break;
+                }
+            }
+            if (!unique) {
+                n--;
+            }
+        }
+        shouldRandomizeUpgrades = false;
+    }
+    else if (!shouldRandomizeUpgrades && fetchCurrentState != FreelancerChooseDistrict) {
+        shouldRandomizeUpgrades = true;
+    }
+}
+
 
 asmHook addButtonsChooseDistrict {
     "addButtonsChooseDistrictV3",
@@ -312,7 +374,7 @@ asmHook addButtonsChooseDistrict {
     { {132} },
     { {0x68d12} }, // True loop start at 0x68d12
     { {270}, {278} }, //stringArrayAddres, buttonsToAdd
-    { {(uint64_t)addedButtonStrings}, {addedButtons} }
+    { {(uint64_t)upgradeList.upgradeText}, {upgradeSelectionCount} }
 };
 
 // Uses set string in createUIButtonChooseDistrictOrupdateSomeUI2 from addButtonsChooseDistrict if it is not null
@@ -356,11 +418,6 @@ struct uthruple {
     uint32_t snd;
     uint32_t thd;
 };
-
-//During the game loop the value of Base+RootOffset is often contained within r14. 
-// This value is the key to finding pointer paths. Most (if not all) paths begin with this value.
-#define rootOffset 0x4fdc18
-#define keyAddress (GetBaseModuleForProcess() + rootOffset)
 
 //MechOffset and weapons offsets are correlated by mechOffset + 0x18 = primaryWeaponOffset
 #define mechOffset 0x2d00
@@ -495,9 +552,6 @@ void setWeaponVars() {
         }
     }
 }
-
-#define stateStructOffset 0x2918
-#define fetchCurrentState (states)*(uint32_t*)(*(uint64_t*)(*(uint64_t*)keyAddress + stateStructOffset) + 0x4)
 
 //Resets weapon var structs in case of weapon change or game state is in a menu where upgrades should reset
 void resetWeaponVars(){
@@ -836,7 +890,9 @@ void handleChooseDistrictMenu() {
                 distanceFromOriginalItem++;
                 closestOriginalDistrictItemAddress = (selectedDistrictItemAddress - (distanceFromOriginalItem * districtItemSize));
             }
-            buttons buttonToHandle = (buttons)(distanceFromOriginalItem - 1);
+
+            buttons buttonToHandle = upgradeList.buttonIndex[distanceFromOriginalItem - 1];
+            //buttons buttonToHandle = (buttons)(distanceFromOriginalItem - 1);
 
             //Handle the pressed mod button
             handlePressedButton(buttonToHandle);
@@ -868,51 +924,6 @@ const enum freelancerMenuStates {
 //#define fetchFreelancerMenuState (freelancerMenuStates)*(uint32_t*)(0x1b18+(*(uint64_t*)(*(uint64_t*)keyAddress + stateStructOffset))+0x128)
 #define fetchFreelancerMenuState (freelancerMenuStates)*(uint32_t*)(*(uint64_t*)(*(uint64_t*)keyAddress + stateStructOffset) + 0x128 + (0x33 * 0x88))
 
-/* DOES NOT WORK
-#define mechResourceBytes 4632
-static unsigned char mechResource[mechResourceBytes];
-
-//Weapon types differ in size. Max seems to be laser weapons at 1608 bytes
-#define maxWeaponResourceBytes 1608
-unsigned char primaryWeaponResource[maxWeaponResourceBytes];
-unsigned char secondaryWeaponResource[maxWeaponResourceBytes];
-
-bool shouldCreateDummy = true;
-void handleFreelancerMenu() {
-    if (fetchCurrentState != Freelancer) {
-        shouldCreateDummy = true;
-        return;     
-    }
-
-    char buffer[256];
-
-    //Create dummy resources by copying selected resources and alter pointers to point to these instead.
-    // This creates some distinction between general resources and a resource the player is deployed with.
-    // This allows, for example, upgrading of the same weapon in primary and secondary slots separately.
-    //Currently only handles Mech, Primary, Secondary. Resources pointed to within these copied resources
-    // (like the bullet resource for weapons) are not handled currently, meaning the subresources are still
-    // considered general and are not distinct 
-    if (fetchFreelancerMenuState == Operation) {
-
-        snprintf(buffer, 100, "*fetchFreelancerSelectedPrimaryWeaponAddress = %llx", *(uint64_t**)fetchFreelancerSelectedPrimaryWeaponAddress);
-        MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
-
-        //Handle Mech Resource
-        memcpy(primaryWeaponResource, *(uint64_t**)fetchFreelancerSelectedPrimaryWeaponAddress, maxWeaponResourceBytes);
-        *(uint64_t*)fetchFreelancerSelectedPrimaryWeaponAddress = (uint64_t)mechResource;
-        snprintf(buffer, 100, "*fetchFreelancerSelectedPrimaryWeaponAddress = %llx", *(uint64_t**)fetchFreelancerSelectedPrimaryWeaponAddress);
-        MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
-        //Handle Primary Weapon Resource
-
-        //Handle Secondary Weapon Resource
-
-        shouldCreateDummy = false;
-    }
-    else {
-        shouldCreateDummy = true;
-    }
-}
-*/
 
 DWORD WINAPI MainThread(LPVOID param) {
     char buffer[256];
@@ -972,6 +983,9 @@ DWORD WINAPI MainThread(LPVOID param) {
         //Handle logic in freelancer menu
         //handleFreelancerMenu();
 
+        //Randomize the list of available upgrades
+        setupUpgradeList();
+
         //Handle logic in freelancer choose district menu
         handleChooseDistrictMenu();
 
@@ -1000,6 +1014,7 @@ BOOL APIENTRY DllMain( HMODULE hModule,
         //VirtualProtect(executable_area, asms->numberOfBytes, old_protect, &old_protect);
         //VirtualFree(executable_area, asms->numberOfBytes, MEM_RELEASE);
         freePatches();
+        _SetOtherThreadsSuspended(false);
         break;
     }
     return TRUE;
