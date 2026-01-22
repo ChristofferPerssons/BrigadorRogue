@@ -39,6 +39,7 @@ const enum states {
 
 #define fetchDeployedMechAddress  *(uint64_t*)(*(uint64_t*)keyAddress + mechOffset)
 #define maxOverchargeOffset 0x10b8
+#define maxHealthOffset 0x10c0
 
 #define fetchDeployedMechLegsAddress  *(uint64_t*)(*(uint64_t*)(*(uint64_t*)keyAddress + mechOffset)+mechLegsOffset)
 #define maxForwardSpeedOffset 0x354

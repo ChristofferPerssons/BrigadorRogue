@@ -85,10 +85,12 @@ const double baseButtonCosts[addedButtons]{
 //Mech
 const enum mechVarsIdx {
     MaxOverchargeIdx,
+    MaxHealthIdx
 };
 
 uthruple deployedMechOffsetsAndVals[] = {
     {maxOverchargeOffset, 0x0, 0x0} //Max Overcharge
+    ,{ maxHealthOffset, 0x0, 0x0 } 
 };
 #define mechVars sizeof(deployedMechOffsetsAndVals) / sizeof(deployedMechOffsetsAndVals[0])
 
@@ -183,6 +185,7 @@ struct upgradeStruct {
     uint64_t removedUpgrades;
     bool randomizeUpgrades;
     float repairAmount;
+    float maxHealth;
 };
 
 struct rngStruct {
@@ -463,18 +466,23 @@ uint64_t getPlayerAddress() {
 }
 
 #define getPlayerHealthAddress ((*(uint64_t*)(getPlayerAddress()+0x2b8) + 0x78)+0x4)
-uint64_t getPlayerHealth() {
+float getPlayerHealth() {
     uint64_t playerAddress = getPlayerAddress();
     if (playerAddress != NULL) {
-        return getPlayerHealthAddress;
+        return *(float*)getPlayerHealthAddress;
     }
     return 0;
 }
 
 //Function should result in repair amount always being added safely while keeping track of current in-game player health. 
 void handlePlayerHealth(upgradeStruct* upgradeState) {
-    if (fetchCurrentState == InGame && getPlayerHealth() != 0) {
-        *(float*)getPlayerHealthAddress += upgradeState->repairAmount;
+    if (fetchCurrentState == InGame && upgradeState->repairAmount != 0 && getPlayerHealth() != 0) {
+        if (getPlayerHealth() + upgradeState->repairAmount >= upgradeState->maxHealth) {
+            *(float*)getPlayerHealthAddress = upgradeState->maxHealth;
+        }
+        else {
+            *(float*)getPlayerHealthAddress += upgradeState->repairAmount;
+        }
         upgradeState->repairAmount = 0;
     }
 }
@@ -637,6 +645,7 @@ void handlePressedButton(buttons buttonToHandle, upgradeStruct* upgradeState, va
         switch (buttonToHandle) {
         case M_Repair:
             upgradeState->repairAmount += repairHealthPoints;
+            upgradeState->maxHealth = *(float*)&vars->offsetsNVals.mech[MaxHealthIdx].val;
             /*
             if (upgradeState->playerHealth + repairAmount <= upgradeState->maxHealth)
                 upgradeState->playerHealth += repairAmount;
@@ -778,6 +787,7 @@ DWORD WINAPI MainThread(LPVOID param) {
         0,
         0,
         true,
+        0,
         0
     };
 
@@ -791,15 +801,8 @@ DWORD WINAPI MainThread(LPVOID param) {
     while (true) {
         //Uncomment this and the unsuspend at the end of the loop if race conditions cause issues
         //_SetOtherThreadsSuspended(true);
-
+        
         /*
-        if (GetAsyncKeyState(VK_NUMPAD1) & 0x80000) {
-            //MessageBoxA(NULL, "State change", "State change", MB_OK);
-            if (setState.isDeployed != 0) {
-                writeByteToDeployedAsm(&setState, 0xE, 0);//Ingame
-            }
-        }
-        */
         if (GetAsyncKeyState(VK_NUMPAD1) & 0x80000) {
             addMoney(1000000);
             snprintf(buffer, 100, "freelancerMenuState = %llx", (uint32_t)fetchFreelancerMenuState);
@@ -813,28 +816,8 @@ DWORD WINAPI MainThread(LPVOID param) {
                 MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
                 *(float*)getPlayerHealthAddress += 100;
             }
-
-            /*
-            //Execute present function in brigador.exe to get the correct money value.
-            typedef double function(uint64_t);
-            uint64_t functionAddress = baseModule + 0x595a0;
-            double (*getMoney)(uint64_t) = (function*)(functionAddress);
-            double money = getMoney(baseModule + 0x4fdea0);
-            snprintf(buffer, 100, "Money = %e", money);
-            MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
-            snprintf(buffer, 100, "Current State = %u", fetchCurrentState);
-            MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
-
-            unsigned char originalButtonCount = readByteFromDeployedAsm(&addButtonsChooseDistrict, 0);
-            //MessageBoxA(NULL, "ALIVE", "ALIVE", MB_OK);
-            snprintf(buffer, 100, "Current index is %u, original button count was %u, %#016x, %#016x", (int)chooseDistrictMenuIndex, (int)originalButtonCount, (int)chooseDistrictMenuStruct, (int)selectedDistrictItemAddress);
-            MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
-            if (selectedDistrictItemAddress != NULL) {
-                snprintf(buffer, 100, "%#016x, %#016x, %#016x", selectedDistrictItemAddress, *(uint64_t*)selectedDistrictItemAddress, chooseDistrictMenuIndex);
-                MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
-            }
-            */
         }
+        */
 
         //Update playerHealth to the modded value
         handlePlayerHealth(&upgradeState);
