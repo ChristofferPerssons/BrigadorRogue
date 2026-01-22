@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <Psapi.h>
 #include <random>
+#include <cmath>
 #include "utils.h"
 #include "BrigadorRogue.h"
 
@@ -52,17 +53,17 @@ const char* addedButtonStrings[] = {
 
 //Cost relate to the button with the same index in addedButtonStrings
 const double baseButtonCosts[addedButtons]{
-    010000
-    , 025000
-    , 025000
-    , 025000
-    , 025000
-    , 025000
-    , 025000
-    , 025000
-    , 025000
-    , 025000
-    , 025000
+    1000
+    , 1000000
+    , 1000000
+    , 1000000
+    , 1000000
+    , 1000000
+    , 1000000
+    , 1000000
+    , 1000000
+    , 1000000
+    , 1000000
 };
 
 //Values used to determine upgrade magnitude
@@ -177,6 +178,7 @@ struct upgradeStruct {
     const uint64_t alwaysAvailableCount;
     const buttons* alwaysAvailableButtons;
     const uint64_t availableCount;
+    const uint64_t freeUpgradesPerLevel;
     const uint64_t consumeMax;
     uint64_t consumed;
     uint64_t removedUpgrades;
@@ -300,7 +302,7 @@ void resetWeaponVars(varStruct* vars){
     
     //Should refactor but w/e
     //Reset Mech Vars and set new orgs
-    if (curDeployedMechAddress != NULL && curDeployedMechAddress != vars->baseAddresses.mech) {
+    if (curDeployedMechAddress != NULL && (curDeployedMechAddress != vars->baseAddresses.mech || shouldReset)) {
         for (int i = 0; i < mechVars; i++) {
             if (vars->baseAddresses.mech != NULL) {
                 *(uint32_t*)(vars->baseAddresses.mech + vars->offsetsNVals.mech[i].offset) = vars->offsetsNVals.mech[i].org;
@@ -312,7 +314,7 @@ void resetWeaponVars(varStruct* vars){
     }
 
     //Reset Mech Legs Vars and set new orgs
-    if (curDeployedMechLegsAddress != NULL && curDeployedMechLegsAddress != vars->baseAddresses.mechLegs) {
+    if (curDeployedMechLegsAddress != NULL && (curDeployedMechLegsAddress != vars->baseAddresses.mechLegs || shouldReset)) {
         for (int i = 0; i < mechLegsVars; i++) {
             if (vars->baseAddresses.mechLegs != NULL) {
                 *(uint32_t*)(vars->baseAddresses.mechLegs + vars->offsetsNVals.mechLegs[i].offset) = vars->offsetsNVals.mechLegs[i].org;
@@ -324,7 +326,7 @@ void resetWeaponVars(varStruct* vars){
     }
 
     //Reset Primary Weapon Vars and set new orgs
-    if (curDeployedPrimaryWeaponAddress != NULL && curDeployedPrimaryWeaponAddress != vars->baseAddresses.primary) {
+    if (curDeployedPrimaryWeaponAddress != NULL && (curDeployedPrimaryWeaponAddress != vars->baseAddresses.primary || shouldReset)) {
         for (int i = 0; i < primaryWeaponVars; i++) {
             if (vars->baseAddresses.primary != NULL) {
                 *(uint32_t*)(vars->baseAddresses.primary + vars->offsetsNVals.primary[i].offset) = vars->offsetsNVals.primary[i].org;
@@ -336,7 +338,7 @@ void resetWeaponVars(varStruct* vars){
     }
 
     //Reset Secondary Weapon Vars and set new orgs
-    if (curDeployedSecondaryWeaponAddress != NULL && curDeployedSecondaryWeaponAddress != vars->baseAddresses.secondary) {
+    if (curDeployedSecondaryWeaponAddress != NULL && (curDeployedSecondaryWeaponAddress != vars->baseAddresses.secondary || shouldReset)) {
         for (int i = 0; i < secondaryWeaponVars; i++) {
             if (vars->baseAddresses.secondary != NULL) {
                 *(uint32_t*)(vars->baseAddresses.secondary + vars->offsetsNVals.secondary[i].offset) = vars->offsetsNVals.secondary[i].org;
@@ -349,7 +351,7 @@ void resetWeaponVars(varStruct* vars){
 
     //Reset Primary Bullet Vars and set new orgs
     if (ammoTypeHasBullet(fetchDeployedPrimaryAmmoTypeAddress)) {
-        if (curDeployedPrimaryBulletAddress != NULL && curDeployedPrimaryBulletAddress != vars->baseAddresses.primaryBullet) {
+        if (curDeployedPrimaryBulletAddress != NULL && (curDeployedPrimaryBulletAddress != vars->baseAddresses.primaryBullet || shouldReset)) {
             for (int i = 0; i < primaryBulletVars; i++) {
                 if (vars->baseAddresses.primaryBullet != NULL) {
                     *(uint32_t*)(vars->baseAddresses.primaryBullet + vars->offsetsNVals.primaryBullet[i].offset) = vars->offsetsNVals.primaryBullet[i].org;
@@ -363,7 +365,7 @@ void resetWeaponVars(varStruct* vars){
 
     //Reset Secondary Bullet Vars and set new orgs
     if (ammoTypeHasBullet(fetchDeployedSecondaryAmmoTypeAddress)) {
-        if (curDeployedSecondaryBulletAddress != NULL && curDeployedSecondaryBulletAddress != vars->baseAddresses.secondaryBullet) {
+        if (curDeployedSecondaryBulletAddress != NULL && (curDeployedSecondaryBulletAddress != vars->baseAddresses.secondaryBullet || shouldReset)) {
             for (int i = 0; i < secondaryBulletVars; i++) {
                 if (vars->baseAddresses.secondaryBullet != NULL) {
                     *(uint32_t*)(vars->baseAddresses.secondaryBullet + vars->offsetsNVals.secondaryBullet[i].offset) = vars->offsetsNVals.secondaryBullet[i].org;
@@ -397,6 +399,9 @@ double getMoney() {
     return *dVar1 + *dVar2 + *dVar4 + *dVar3;
 }
 
+void addMoney(double amount) {
+    *(double*)(moneyBase + 0xa4b8) += amount;
+}
 
 //Returns True on valid and successful subtraction of in run money.
 bool subtractMoney(double subtractAmount) {
@@ -519,7 +524,7 @@ void handlePlayerHealth(upgradeStruct* upgradeState) {
 }
 
 double getUpgradeCost(buttons buttonToHandle, upgradeStruct* upgradeState) {
-    return upgradeState->upgradesCost[buttonToHandle] * upgradeState->consumed * 10;
+    return upgradeState->consumed < upgradeState->freeUpgradesPerLevel ? 0 : upgradeState->upgradesCost[buttonToHandle] * pow(5, (upgradeState->consumed-1));
 }
 
 
@@ -811,6 +816,7 @@ DWORD WINAPI MainThread(LPVOID param) {
         sizeof(alwaysAvailableUpgradesButtons) / sizeof(alwaysAvailableUpgradesButtons[0]),
         alwaysAvailableUpgradesButtons,
         4,
+        1,
         5,
         0,
         0,
@@ -839,6 +845,7 @@ DWORD WINAPI MainThread(LPVOID param) {
         */
 
         if (GetAsyncKeyState(VK_NUMPAD1) & 0x80000) {
+            addMoney(1000000);
             snprintf(buffer, 100, "freelancerMenuState = %llx", (uint32_t)fetchFreelancerMenuState);
             MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
             snprintf(buffer, 100, "playerAddress = %#016x", getPlayerAddress());
