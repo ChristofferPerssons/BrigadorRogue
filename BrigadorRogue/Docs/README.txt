@@ -2,7 +2,7 @@ Requirements:
 64bit Windows GoG version of Brigador v1.63 (haven't tested other versions but I highly doubt they'll work)
 
 Installation:
-Extract the downloaded zip folder to the folder where brigador.exe is located. Should be 5 new files.
+Extract the downloaded zip folder to the folder where brigador.exe is located. Should be 4 new files.
 Launch the mod with BrigadorRogue.exe
 
 Uninstallation:
