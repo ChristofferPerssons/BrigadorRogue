@@ -223,25 +223,8 @@ asmHook createUIButtonUseSetString{
     { {0x0}}  //Must be set before deploying. Should be address to location where addButtonsChooseDistrict stores the address of the nextStringToPrintAddress
 };
 
-asmHook setState{
-    "setState",
-    188,
-    120,
-    0x75483,
-    18,
-    NULL,
-    1,
-    false,
-    {},
-    {},
-    {},
-    {}
-};
-
 void applyPatches(void) {
     _SetOtherThreadsSuspended(true);
-
-    deployExecutableASM(&setState);
     deployExecutableASM(&addButtonsChooseDistrict);
     uint64_t nextStringToPrintAddress = (addButtonsChooseDistrict.hookTarget + (addButtonsChooseDistrict.fileSize - addButtonsChooseDistrict.bytesToStrip) - addButtonsChooseDistrict.numberOfWritableBytes + 18);
     createUIButtonUseSetString.externalReplacementValues[0] = nextStringToPrintAddress;
@@ -252,7 +235,6 @@ void applyPatches(void) {
 }
 
 void freePatches(void) {
-    VirtualFree((LPVOID)setState.hookTarget, 0, MEM_RELEASE);
     VirtualFree((LPVOID)addButtonsChooseDistrict.hookTarget, 0, MEM_RELEASE);
     VirtualFree((LPVOID)createUIButtonUseSetString.hookTarget, 0, MEM_RELEASE);
 }
@@ -693,7 +675,7 @@ void handlePressedButton(buttons buttonToHandle, upgradeStruct* upgradeState, va
         upgradeState->consumed++;
         switch (buttonToHandle) {
         case M_Repair:
-            upgradeState->repairAmount += 50;
+            upgradeState->repairAmount += repairHealthPoints;
             /*
             if (upgradeState->playerHealth + repairAmount <= upgradeState->maxHealth)
                 upgradeState->playerHealth += repairAmount;
@@ -703,52 +685,52 @@ void handlePressedButton(buttons buttonToHandle, upgradeStruct* upgradeState, va
             break;
         case M_PosOvercharge:
             refloat = reinterpret_cast<float&>(vars->offsetsNVals.mech[MaxOverchargeIdx].val);
-            refloat *= 1.1;
+            refloat *= overchargeMult;
             vars->offsetsNVals.mech[MaxOverchargeIdx].val = reinterpret_cast<uint32_t&>(refloat);
             break;
         case M_PosForwardSpeed:
             refloat = reinterpret_cast<float&>(vars->offsetsNVals.mechLegs[MaxForwardSpeedIdx].val);
-            refloat *= 1.1;
+            refloat *= forwardSpeedMult;
             vars->offsetsNVals.mechLegs[MaxForwardSpeedIdx].val = reinterpret_cast<uint32_t&>(refloat);
             break;
         case P_PosCapacity: // Primary: +Capacity
-            vars->offsetsNVals.primary[CapacityIdx].val = (uint32_t)(vars->offsetsNVals.primary[CapacityIdx].val * 1.2);
+            vars->offsetsNVals.primary[CapacityIdx].val = (uint32_t)(vars->offsetsNVals.primary[CapacityIdx].val * pCapacityMult);
             break;
         case P_PosFireRate: // Primary: +Fire Rate
             refloat = reinterpret_cast<float&>(vars->offsetsNVals.primary[CooldownIdx].val);
-            refloat *= 0.9;
+            refloat *= 2-pFireRateMult;
             vars->offsetsNVals.primary[CooldownIdx].val = reinterpret_cast<uint32_t&>(refloat);
             break;
         case P_PosProjectilesNegAccuracy: // Primary: +Projectiles, -Accuracy
-            vars->offsetsNVals.primary[ShotCountIdx].val = (uint32_t)((int)vars->offsetsNVals.primary[ShotCountIdx].val + 1);
+            vars->offsetsNVals.primary[ShotCountIdx].val = (uint32_t)((int)vars->offsetsNVals.primary[ShotCountIdx].val + pProjectiles);
             refloat = reinterpret_cast<float&>(vars->offsetsNVals.primary[AccuracyIdx].val);
-            refloat += 5*0.017; //+5 degrees
+            refloat += pAccuracy*0.017; //+5 degrees
             //refloat *= 1.1;
             vars->offsetsNVals.primary[AccuracyIdx].val = reinterpret_cast<uint32_t&>(refloat);
             break;
         case P_PosPropMult: // Primary: +Structure Damage
             refloat = reinterpret_cast<float&>(vars->offsetsNVals.primaryBullet[PropMultIdx].val);
-            refloat *= 1.1;
+            refloat *= pPropMult;
             vars->offsetsNVals.primaryBullet[PropMultIdx].val = reinterpret_cast<uint32_t&>(refloat);
             break;
         case S_PosCapacity: // Secondary: +Capacity
-            vars->offsetsNVals.secondary[CapacityIdx].val = (uint32_t)(vars->offsetsNVals.secondary[CapacityIdx].val * 1.2);
+            vars->offsetsNVals.secondary[CapacityIdx].val = (uint32_t)(vars->offsetsNVals.secondary[CapacityIdx].val * sCapacityMult);
             break;
         case S_PosFireRate: // Secondary: +Fire Rate
             refloat = reinterpret_cast<float&>(vars->offsetsNVals.secondary[CooldownIdx].val);
-            refloat *= 0.9;
+            refloat *= 2 - sFireRateMult;
             vars->offsetsNVals.secondary[CooldownIdx].val = reinterpret_cast<uint32_t&>(refloat);
             break;
         case S_PosProjectilesNegAccuracy: // Secondary: +Projectiles, -Accuracy
-            vars->offsetsNVals.secondary[ShotCountIdx].val = (uint32_t)((int)vars->offsetsNVals.secondary[ShotCountIdx].val + 1);
+            vars->offsetsNVals.secondary[ShotCountIdx].val = (uint32_t)((int)vars->offsetsNVals.secondary[ShotCountIdx].val + pProjectiles);
             refloat = reinterpret_cast<float&>(vars->offsetsNVals.secondary[AccuracyIdx].val);
-            refloat += 5*0.017; //+5 degrees.
+            refloat += sAccuracy*0.017; //+5 degrees.
             //refloat *= 1.1;
             vars->offsetsNVals.secondary[AccuracyIdx].val = reinterpret_cast<uint32_t&>(refloat);
             break;
         case S_PosPropMult: // Secondary: +Structure Damage
             refloat = reinterpret_cast<float&>(vars->offsetsNVals.secondaryBullet[PropMultIdx].val);
-            refloat *= 1.1;
+            refloat *= sPropMult;
             vars->offsetsNVals.secondaryBullet[PropMultIdx].val = reinterpret_cast<uint32_t&>(refloat);
             break;
         default:
