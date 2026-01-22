@@ -11,271 +11,13 @@
 #include <stdint.h>
 #include <Psapi.h>
 #include <random>
+#include "utils.h"
+#include "BrigadorRogue.h"
 
 using namespace std;
 
-//During the game loop the value of Base+RootOffset is often contained within r14. 
-// This value is the key to finding pointer paths. Most (if not all) paths begin with this value.
-#define rootOffset 0x4fdc18
-#define keyAddress (GetBaseModuleForProcess() + rootOffset)
-
-const enum states {
-    MainMenu = 0x2,
-    Campaign = 0x3,
-    Freelancer = 0x4,
-    Aquisitions = 0x5,
-    Settings = 0x7, 
-    Credits = 0x6,
-    languageSelect = 0xA, 
-    AfterLoadLevel = 0x8,
-    InGame = 0xE,
-    PauseMenu = 0x10,
-    InGameSettings = 0x11,
-    FreelancerChooseDistrict = 0xC, 
-    LoseScreen = 0x0B
-};
-
-#define stateStructOffset 0x2918
-#define fetchCurrentState (states)*(uint32_t*)(*(uint64_t*)(*(uint64_t*)keyAddress + stateStructOffset) + 0x4)
-
-#define MAX_PATCH_SIZE 1024
-
-//Struct requires ONE register to be available and overwritten without being pushed to allow for absolute jumps (because they require a register, not a constant, I believe)
-struct asmHook {
-    char asmFilename[MAX_PATH]; //Should be placed in the same folder as this dll.
-    uint64_t fileSize; // total file size.
-    uint64_t bytesToStrip; //prefix bytes to strip. Should be 120 unless the fasm (asm) prologue is non-standard.
-    uint64_t hookStartOffset; //baseAdress+hookStartOffset = the adress at which we begin overwrite of main process code
-    uint64_t overwrittenBytes; //Should be byte size of all completely and partially overwritten operation combined. This should ensure that after overwrittenBytes+extraOverwritten a valid instruction can be executed.
-    uint64_t hookTarget = NULL; //Must be set after memory has been alocated. Start adress of asm function in memory
-    uint64_t numberOfWritableBytes; //Always coded to be placed contiguously at end of asm file
-    //jump back adress should always be overwritten starting at "8 (jump adress) + 2 (jmp register opcode) + numberOfWritableBytes" number of bytes from end of file.
-    BOOL isDeployed = false;
-    uint64_t addressesToReplaceInASM[64]; //Start byte to replace with baseAddress+replacementOffset
-    uint64_t replacementOffsets[64]; //Offsets to be used in combination with with same index in addressesToReplaceInASM
-    uint64_t externalAddressesToReplaceInASM[64]; //Start byte to replace with below values according to index
-    uint64_t externalReplacementValues[64]; //Values meant to replace values in the asm. Currently used for string addresses for example
-};
-
-
-int fileToBytes (char* name, char* buffer) {
-    // Open file
-    ifstream file(name, ios::binary); // and since you want bytes rather than
-    // characters, strongly consider opening the
-    // File in binary mode with std::ios_base::binary
-    // Get length of file
-    // Move to the end to determine the file size
-    file.seekg(0, ios::end);
-    streamsize size = file.tellg();
-    file.seekg(0, ios::beg);  // Move back to the beginning
-
-    // Read file
-    file.read(buffer, size);
-
-    //ofstream file2("FILEREADCOPY", ios::binary);
-    //file2.write(buffer, size);
-
-    file.close();
-
-    return 1;
-}
-
-void _SetOtherThreadsSuspended(bool suspend)
-{
-    HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-    if (hSnapshot != INVALID_HANDLE_VALUE)
-    {
-        THREADENTRY32 te;
-        te.dwSize = sizeof(THREADENTRY32);
-        if (Thread32First(hSnapshot, &te))
-        {
-            do
-            {
-                if (te.dwSize >= (FIELD_OFFSET(THREADENTRY32, th32OwnerProcessID) + sizeof(DWORD))
-                    && te.th32OwnerProcessID == GetCurrentProcessId()
-                    && te.th32ThreadID != GetCurrentThreadId())
-                {
-
-                    HANDLE thread = ::OpenThread(THREAD_ALL_ACCESS, FALSE, te.th32ThreadID);
-                    if (thread != NULL)
-                    {
-                        if (suspend)
-                        {
-                            SuspendThread(thread);
-                        }
-                        else
-                        {
-                            ResumeThread(thread);
-                        }
-                        CloseHandle(thread);
-                    }
-                }
-            } while (Thread32Next(hSnapshot, &te));
-        }
-    }
-}
-
-uint64_t GetBaseModuleForProcess()
-{
-  HANDLE process = GetCurrentProcess();
-  HMODULE processModules[1024];
-  DWORD numBytesWrittenInModuleArray = 0;
-  EnumProcessModules(process, processModules, sizeof(HMODULE) * 1024, &numBytesWrittenInModuleArray);
-
-  DWORD numRemoteModules = numBytesWrittenInModuleArray / sizeof(HMODULE);
-  CHAR processName[256];
-  GetModuleFileNameExA(process, NULL, processName, 256); //a null module handle gets the process name
-  _strlwr_s(processName, 256);
-
-  HMODULE module = 0; //An HMODULE is the DLL's base address 
-
-  for (DWORD i = 0; i < numRemoteModules; ++i)
-  {
-    CHAR moduleName[256];
-    CHAR absoluteModuleName[256];
-    GetModuleFileNameExA(process, processModules[i], moduleName, 256);
-
-    _fullpath(absoluteModuleName, moduleName, 256);
-    _strlwr_s(absoluteModuleName, 256);
-
-    if (strcmp(processName, absoluteModuleName) == 0)
-    {
-      module = processModules[i];
-      break;
-    }
-  }
-
-  return (uint64_t)module;
-}
-
-
-//#define JMP64RAX { {0x49}, { 0xba }, { 0x00 }, { 0x00 }, { 0x00 }, { 0x00 }, { 0x00 }, { 0x00 }, { 0x00 }, { 0x00 }, { 0xff }, { 0xe0 } }
-// 
-//Using this overwrites r10 from hook function. Keep this in mind
-//#define JMP64R10 { {0x49}, { 0xb8 }, { 0x00 }, { 0x00 }, { 0x00 }, { 0x00 }, { 0x00 }, { 0x00 }, { 0x00 }, { 0x00 }, { 0x41 }, { 0xff }, { 0xe2 } }
-
-//Using this overwrites r11 from hook function. 13 bytes necessary. Keep this in mind
-#define JMP64R11 { {0x49}, { 0xbb }, { 0x00 }, { 0x00 }, { 0x00 }, { 0x00 }, { 0x00 }, { 0x00 }, { 0x00 }, { 0x00 }, { 0x41 }, { 0xff }, { 0xe3 } }
-
-void deployExecutableASM(struct asmHook *asms) {
-    char byteBuffer[MAX_PATCH_SIZE];
-    char adressBytes[8];
-    uint64_t asmSize = asms->fileSize - asms->bytesToStrip;
-
-    //Get asm file bytes
-    fileToBytes(asms->asmFilename, byteBuffer);
-
-
-    //Allocate area for executable code
-    DWORD old_protect = 0;
-    LPVOID executable_area = VirtualAlloc(NULL, MAX_PATCH_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-    if (executable_area == NULL) {
-        return;
-    }
-
-    asms->hookTarget = (uint64_t)executable_area;
-
-    //Set asm return adress
-    uint64_t returnAdress = GetBaseModuleForProcess() + asms->hookStartOffset + asms->overwrittenBytes;
-    memcpy(adressBytes, &returnAdress, 8);
-    memset(&byteBuffer[asms->fileSize - (8 + 3 + asms->numberOfWritableBytes)], 0x00, 8);
-    memcpy(&byteBuffer[asms->fileSize - (8 + 3 + asms->numberOfWritableBytes)], adressBytes, 8);
-
-    //Set asm adresses that require base addresses for absolute jumps
-    uint64_t replacementAddress = 0;
-    for (int i = 0; asms->addressesToReplaceInASM[i] != 0 || i>=sizeof(asms->addressesToReplaceInASM); i++) {
-        replacementAddress = GetBaseModuleForProcess() + asms->replacementOffsets[i];
-        memcpy(adressBytes, &replacementAddress, 8);
-        memset(&byteBuffer[asms->addressesToReplaceInASM[i]], 0x00, 8);
-        memcpy(&byteBuffer[asms->addressesToReplaceInASM[i]], adressBytes, 8);
-    }
-
-    for (int i = 0; asms->externalAddressesToReplaceInASM[i] != 0 || i >= sizeof(asms->externalAddressesToReplaceInASM); i++) {
-        replacementAddress = asms->externalReplacementValues[i];
-        memcpy(adressBytes, &replacementAddress, 8);
-        memset(&byteBuffer[asms->externalAddressesToReplaceInASM[i]], 0x00, 8);
-        memcpy(&byteBuffer[asms->externalAddressesToReplaceInASM[i]], adressBytes, 8);
-    }
-
-    //Write executable asm code
-    memcpy((void*)(asms->hookTarget), &(byteBuffer[asms->bytesToStrip]), asmSize);
-
-    //Get hook adress bytes
-    memcpy(adressBytes, &asms->hookTarget, 8);
-    //char* adressBytes2 = (char*)&executable_area;
-
-    //Construct hook jump 
-    char jmpOverwrite[] = JMP64R11;
-    memcpy(jmpOverwrite+2, &asms->hookTarget, sizeof(asms->hookTarget));
-
-    //Insert hook jmp
-    DWORD old_protect2;
-    void* hookAdress = (void*)(GetBaseModuleForProcess() + asms->hookStartOffset);
-
-    VirtualProtect(hookAdress, MAX_PATCH_SIZE, PAGE_EXECUTE_READWRITE, &old_protect2);
-    memset(hookAdress, 0x90, asms->overwrittenBytes);
-
-    memcpy(hookAdress, jmpOverwrite, sizeof(jmpOverwrite));
-
-    ofstream debugFile("DebugFile", ios::binary);
-    debugFile.write(&(byteBuffer[asms->bytesToStrip]), asmSize);
-    debugFile.write(jmpOverwrite, sizeof(jmpOverwrite));
-
-
-    asms->isDeployed = true;
-    //int(*f)() = (int(*)()) executable_area;
-    //f();
-
-    // Note: RAII this in C++. Restore old flags, free memory.
-    VirtualProtect(hookAdress, MAX_PATCH_SIZE, old_protect2, &old_protect2);
-    //VirtualFree(hookAdress, MAX_PATCH_SIZE, MEM_RELEASE);
-   
-    return;
-}
-
-void writeBytesToDeployedAsm(struct asmHook *asms, uint64_t input, uint64_t index, unsigned char bytes) {
-    _SetOtherThreadsSuspended(true);
-    uint64_t asmSize = asms->fileSize - asms->bytesToStrip;
-    memcpy((void*)(asms->hookTarget + asmSize - asms->numberOfWritableBytes + index), &input, bytes);
-    _SetOtherThreadsSuspended(false);
-    return;
-}
-
-unsigned char readByteFromDeployedAsm(struct asmHook* asms, uint64_t index) {
-    _SetOtherThreadsSuspended(true);
-    uint64_t asmSize = asms->fileSize - asms->bytesToStrip;
-    unsigned char ret = *(unsigned char*)(asms->hookTarget + asmSize - asms->numberOfWritableBytes + index);
-    _SetOtherThreadsSuspended(false);
-    return ret;
-}
-
-
-/*Redo the asm code for this one if you want to use it.Currently uses rax for the absolute jump which it should not do due to calling conventions
-struct asmHook alterState {
-    "alterState",
-    186,
-    120,
-    0x5cd54,
-    18,
-    NULL,
-    1,
-    false
-};*/
-
-asmHook setState {
-    "setState",
-    188,
-    120,
-    0x75483,
-    18,
-    NULL,
-    1,
-    false,
-    {},
-    {},
-    {},
-    {}
-};
+//Some globals follow but you should use a struct created in the main loop to access them.
+//They are only global since I find it easier to match them to their enum values in this way.
 
 //Used to fetch index of added button pressed
 const enum buttons {
@@ -294,36 +36,163 @@ const enum buttons {
 
 //Must correspond to buttons enum
 const char* addedButtonStrings[] = {
-    {"Mech: Repair"}
-    , {"Mech: +Max Overcharge"}
-    , {"Mech: +Forward Speed"}
-    , {"Primary: +Capacity"}
-    , {"Primary: +Fire Rate"} 
-    , {"Primary: +Projectiles -Accuracy"}
-    , {"Primary: +Structure Damage"}
-    , {"Secondary: +Capacity"}
-    , {"Secondary: +Fire Rate"} 
-    , {"Secondary: +Projectiles -Accuracy"}
-    , {"Secondary: +Structure Damage"}
+    {"Repair +%dhp $%lld k"}
+    , {"Overcharge +%.1fx $%lld k"}
+    , {"Forward Speed +%.1fx $%lld k"}
+    , {"P: Capacity +%.1fx $%lld k"}
+    , {"P: Fire Rate +%.1fx $%lld k"}
+    , {"P: Projectiles +%d Accuracy -%d $%lld k"}
+    , {"P: Structure Damage +%.1f%% $%lld k"}
+    , {"S: Capacity +%.1fx $%lld k"}
+    , {"S: Fire Rate +%.1fx $%lld k"}
+    , {"S: Projectiles +%d Accuracy -%d $%lld k"}
+    , {"S: Structure +%.1fx $%lld k"}
 };
-
 #define addedButtons sizeof(addedButtonStrings) / sizeof(addedButtonStrings[0])
 
-
-#define upgradeSelectionCount 3
-
-struct upgrades {
-    char* upgradeText[upgradeSelectionCount];
-    buttons buttonIndex[upgradeSelectionCount];
+//Cost relate to the button with the same index in addedButtonStrings
+const double baseButtonCosts[addedButtons]{
+    010000
+    , 025000
+    , 025000
+    , 025000
+    , 025000
+    , 025000
+    , 025000
+    , 025000
+    , 025000
+    , 025000
+    , 025000
 };
 
+//Values used to determine upgrade magnitude
+#define repairHealthPoints 50
+#define overchargeMult 1.1
+#define forwardSpeedMult 1.1
+#define pCapacityMult 1.1
+#define sCapacityMult 1.1
+#define pFireRateMult 1.1
+#define sFireRateMult 1.1
+#define pProjectiles 1
+#define pAccuracy 5
+#define sProjectiles 1
+#define sAccuracy 5
+#define pPropMult 1.1
+#define sPropMult 1.1
+
+//Arrays below use a tuple to store: Offset, Default Value, Modded Value
+//Mech
+const enum mechVarsIdx {
+    MaxOverchargeIdx,
+};
+
+uthruple deployedMechOffsetsAndVals[] = {
+    {maxOverchargeOffset, 0x0, 0x0} //Max Overcharge
+};
+#define mechVars sizeof(deployedMechOffsetsAndVals) / sizeof(deployedMechOffsetsAndVals[0])
+
+//MechLegs
+const enum mechLegsVarsIdx {
+    MaxForwardSpeedIdx,
+};
+
+uthruple deployedMechLegsOffsetsAndVals[] = {
+    {maxForwardSpeedOffset, 0x0, 0x0} //Max Forward Speed
+};
+#define mechLegsVars sizeof(deployedMechLegsOffsetsAndVals) / sizeof (deployedMechLegsOffsetsAndVals[0])
+
+//Weapons
+const enum weaponVarIdx {
+    CapacityIdx,
+    CooldownIdx,
+    ShotCountIdx,
+    AccuracyIdx
+};
+
+uthruple deployedPrimaryWeaponOffsetsAndVals[] = {
+    {weaponVarsOffset + weaponCapacityOffset, 0x0, 0x0} //Capacity
+    ,{weaponVarsOffset + weaponCooldownOffset, 0x0, 0x0} //Cooldown
+    ,{weaponVarsOffset + weaponShotCountOffset, 0x0, 0x0} //Shot Count
+    ,{weaponVarsOffset + weaponAccuracyOffset, 0x0, 0x0} //Accuracy Cone Width
+};
+#define primaryWeaponVars sizeof(deployedPrimaryWeaponOffsetsAndVals) / sizeof(deployedPrimaryWeaponOffsetsAndVals[0])
+
+uthruple deployedSecondaryWeaponOffsetsAndVals[] = {
+    {weaponVarsOffset + weaponCapacityOffset, 0x0, 0x0} //Capacity
+    ,{weaponVarsOffset + weaponCooldownOffset, 0x0, 0x0} //Cooldown
+    ,{weaponVarsOffset + weaponShotCountOffset, 0x0, 0x0} //Shot Count
+    ,{weaponVarsOffset + weaponAccuracyOffset, 0x0, 0x0} //Accuracy Cone Width
+};
+#define secondaryWeaponVars sizeof(deployedSecondaryWeaponOffsetsAndVals) / sizeof(deployedSecondaryWeaponOffsetsAndVals[0])
+
+//Bullets
+const enum bulletVars {
+    PropMultIdx
+};
+
+uthruple deployedPrimaryBulletOffsetsAndVals[] = {
+    {bulletPropMultOffset, 0x0, 0x0} //prop multiplier
+};
+#define primaryBulletVars sizeof(deployedPrimaryBulletOffsetsAndVals) / sizeof(deployedPrimaryBulletOffsetsAndVals[0])
+
+uthruple deployedSecondaryBulletOffsetsAndVals[] = {
+    {bulletPropMultOffset, 0x0, 0x0} //prop multiplier
+};
+#define secondaryBulletVars sizeof(deployedSecondaryBulletOffsetsAndVals) / sizeof(deployedSecondaryBulletOffsetsAndVals[0])
+
+struct varBaseAddresses {
+    uint64_t mech;
+    uint64_t mechLegs;
+    uint64_t primary;
+    uint64_t secondary;
+    uint64_t primaryBullet;
+    uint64_t secondaryBullet;
+};
+
+struct offsetsAndVals {
+    uthruple* mech;
+    uthruple* mechLegs;
+    uthruple* primary;
+    uthruple* secondary;
+    uthruple* primaryBullet;
+    uthruple* secondaryBullet;
+};
+
+struct varStruct {
+    varBaseAddresses baseAddresses;
+    offsetsAndVals offsetsNVals;
+};
+
+#define maxAvailableUpgrades 32
+struct upgrades {
+    char* upgradeText[maxAvailableUpgrades];
+    buttons buttonIndex[maxAvailableUpgrades];
+};
+
+#define maxButtonStringLength 256
+struct upgradeStruct {
+    upgrades* availableUpgrades;
+    char (*formattedButtonStrings)[maxButtonStringLength];
+    const double* upgradesCost;
+    const uint64_t alwaysAvailableCount;
+    const buttons* alwaysAvailableButtons;
+    const uint64_t availableCount;
+    const uint64_t consumeMax;
+    uint64_t consumed;
+    uint64_t removedUpgrades;
+    bool randomizeUpgrades;
+    float repairAmount;
+};
+
+struct rngStruct {
+    std::mt19937 gen;
+    std::uniform_int_distribution<> distrib;
+};
+
+//Is global to make but could be avoided with the altering of patch deployment method. addButtonsChooseDistrict and 
 upgrades upgradeList;
 
-//Repair is set to always show up
-#define alwaysAvailableUpgradeCount 1
-buttons alwaysAvailableUpgradesButtons[alwaysAvailableUpgradeCount] = { M_Repair };
-
-asmHook addButtonsChooseDistrict {
+asmHook addButtonsChooseDistrict{
     "addButtonsChooseDistrictV3",
     294,
     120,
@@ -339,7 +208,7 @@ asmHook addButtonsChooseDistrict {
 };
 
 // Uses set string in createUIButtonChooseDistrictOrupdateSomeUI2 from addButtonsChooseDistrict if it is not null
-asmHook createUIButtonUseSetString {
+asmHook createUIButtonUseSetString{
     "createUIButtonUseSetString",
     173,
     120,
@@ -352,6 +221,21 @@ asmHook createUIButtonUseSetString {
     {},
     { {165}}, //stringToPrintAddressLocation
     { {0x0}}  //Must be set before deploying. Should be address to location where addButtonsChooseDistrict stores the address of the nextStringToPrintAddress
+};
+
+asmHook setState{
+    "setState",
+    188,
+    120,
+    0x75483,
+    18,
+    NULL,
+    1,
+    false,
+    {},
+    {},
+    {},
+    {}
 };
 
 void applyPatches(void) {
@@ -373,109 +257,6 @@ void freePatches(void) {
     VirtualFree((LPVOID)createUIButtonUseSetString.hookTarget, 0, MEM_RELEASE);
 }
 
-//thruple. Currently used as: offset, 4byte default value, 4byte modded value
-struct uthruple {
-    uint64_t fst;
-    uint32_t snd;
-    uint32_t thd;
-};
-
-//MechOffset and weapons offsets are correlated by mechOffset + 0x18 = primaryWeaponOffset
-#define mechOffset 0x2d00
-#define mechLegsOffset 0x80
-#define primaryWeaponOffset (0x2d18+(0x0<<0x5))
-#define secondaryWeaponOffset  (0x2d18+(0x1<<0x5))
-#define bulletOffset 0x540
-
-//Arrays below use a tuple to store: Offset, Default Value, Modded Value
-
-//Mech
-const enum mechVarsIdx {
-    MaxOverchargeIdx,
-};
-
-#define fetchDeployedMechAddress  *(uint64_t*)(*(uint64_t*)keyAddress + mechOffset)
-uint64_t deployedMechAddress = 0;
-uthruple deployedMechOffsetsAndVars[] = {
-    {0x10b8, 0x0, 0x0} //Max Overcharge
-};
-#define mechVars sizeof(deployedMechOffsetsAndVars) / sizeof(deployedMechOffsetsAndVars[0])
-
-//MechLegs
-const enum mechLegsVarsIdx {
-    MaxForwardSpeedIdx,
-};
-
-#define fetchDeployedMechLegsAddress  *(uint64_t*)(*(uint64_t*)(*(uint64_t*)keyAddress + mechOffset)+mechLegsOffset)
-uint64_t deployedMechLegsAddress = 0;
-uthruple deployedMechLegsOffsetsAndVars[] = {
-    {0x354, 0x0, 0x0} //Max Forward Speed
-};
-#define mechLegsVars sizeof(deployedMechLegsOffsetsAndVars) / sizeof (deployedMechLegsOffsetsAndVars[0])
-
-//Weapons
-const enum weaponVarIdx {
-    CapacityIdx,
-    CooldownIdx,
-    ShotCountIdx,
-    AccuracyIdx
-};
-
-#define fetchDeployedPrimaryWeaponAddress  *(uint64_t*)(*(uint64_t*)keyAddress + primaryWeaponOffset)
-uint64_t deployedPrimaryWeaponAddress = 0;
-uthruple deployedPrimaryWeaponOffsetsAndVars[] = {
-    {0x3d8 + 0x20, 0x0, 0x0} //Capacity
-    ,{0x3d8 + 0x0, 0x0, 0x0} //Cooldown
-    ,{0x3d8 + 0x28, 0x0, 0x0} //Shot Count
-    ,{0x3d8 + 0x10, 0x0, 0x0} //Accuracy Cone Width
-};
-#define primaryWeaponVars sizeof(deployedPrimaryWeaponOffsetsAndVars) / sizeof(deployedPrimaryWeaponOffsetsAndVars[0])
-
-#define fetchDeployedSecondaryWeaponAddress  *(uint64_t*)(*(uint64_t*)keyAddress + secondaryWeaponOffset)
-uint64_t deployedSecondaryWeaponAddress = 0;
-uthruple deployedSecondaryWeaponOffsetsAndVars[] = {
-    {0x3d8 + 0x20, 0x0, 0x0} //Capacity
-    ,{0x3d8 + 0x0, 0x0, 0x0} //Cooldown
-    ,{0x3d8 + 0x28, 0x0, 0x0} //Shot Count
-    ,{0x3d8 + 0x10, 0x0, 0x0} //Accuracy Cone Width
-};
-#define secondaryWeaponVars sizeof(deployedSecondaryWeaponOffsetsAndVars) / sizeof(deployedSecondaryWeaponOffsetsAndVars[0])
-
-//Bullets
-const enum bulletVars {
-    PropMultIdx
-};
-
-#define fetchDeployedPrimaryBulletAddress  *(uint64_t*)(*(uint64_t*)(*(uint64_t*)keyAddress + primaryWeaponOffset)+bulletOffset)
-uint64_t deployedPrimaryBulletAddress = 0;
-uthruple deployedPrimaryBulletOffsetsAndVars[] = {
-    {0x24, 0x0, 0x0} //prop multiplier
-};
-#define primaryBulletVars sizeof(deployedPrimaryBulletOffsetsAndVars) / sizeof(deployedPrimaryBulletOffsetsAndVars[0])
-
-#define fetchDeployedSecondaryBulletAddress *(uint64_t*)(*(uint64_t*)(*(uint64_t*)keyAddress + secondaryWeaponOffset)+bulletOffset)
-uint64_t deployedSecondaryBulletAddress = 0;
-uthruple deployedSecondaryBulletOffsetsAndVars[] = {
-    {0x24, 0x0, 0x0} //prop multiplier
-};
-#define secondaryBulletVars sizeof(deployedSecondaryBulletOffsetsAndVars) / sizeof(deployedSecondaryBulletOffsetsAndVars[0])
-
-
-const enum ammoTypes {
-    None = 0x0,
-    Bullet = 0x1,
-    Artillery = 0x2,
-    Flame = 0x4,
-    Laser = 0x8,
-    Cannon = 0x10,
-    Smoke = 0x20,
-    EMP = 0x40
-};
-
-#define ammoTypeOffset 0x48c
-#define fetchDeployedPrimaryAmmoTypeAddress  (unsigned char*)(*(uint64_t*)(*(uint64_t*)keyAddress + primaryWeaponOffset)+ammoTypeOffset)
-#define fetchDeployedSecondaryAmmoTypeAddress  (unsigned char*)(*(uint64_t*)(*(uint64_t*)keyAddress + secondaryWeaponOffset)+ammoTypeOffset)
-
 bool ammoTypeHasBullet(unsigned char* ammoTypeAddress) {
     ammoTypes ammoType = (ammoTypes)*ammoTypeAddress;
     if (ammoType == Bullet || ammoType == Artillery || ammoType == Cannon) {
@@ -485,37 +266,37 @@ bool ammoTypeHasBullet(unsigned char* ammoTypeAddress) {
 }
 
 //Copies stored weapon var values to game memory
-void setWeaponVars() {
+void setWeaponVars(varStruct* vars) {
     char buffer[256];
     //Should refactor but w/e
     for (int i = 0; i < mechVars; i++) {
-        //snprintf(buffer, 100, "%#016x, %#016x", (uint32_t*)(deployedMechAddress + deployedMechOffsetsAndVars[i].fst), deployedMechOffsetsAndVars[i].thd);
+        //snprintf(buffer, 100, "%#016x, %#016x", (uint32_t*)(deployedMechAddress + deployedMechOffsetsAndVars[i].offset), deployedMechOffsetsAndVars[i].val);
         //MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
-        *(uint32_t*)(deployedMechAddress + deployedMechOffsetsAndVars[i].fst) = deployedMechOffsetsAndVars[i].thd;
+        *(uint32_t*)(vars->baseAddresses.mech + vars->offsetsNVals.mech[i].offset) = vars->offsetsNVals.mech[i].val;
     }
     for (int i = 0; i < mechLegsVars; i++) {
-        *(uint32_t*)(deployedMechLegsAddress + deployedMechLegsOffsetsAndVars[i].fst) = deployedMechLegsOffsetsAndVars[i].thd;
+        *(uint32_t*)(vars->baseAddresses.mechLegs + vars->offsetsNVals.mechLegs[i].offset) = vars->offsetsNVals.mechLegs[i].val;
     }
     for (int i = 0; i < primaryWeaponVars; i++) {
-        *(uint32_t*)(deployedPrimaryWeaponAddress + deployedPrimaryWeaponOffsetsAndVars[i].fst) = deployedPrimaryWeaponOffsetsAndVars[i].thd;
+        *(uint32_t*)(vars->baseAddresses.primary + vars->offsetsNVals.primary[i].offset) = vars->offsetsNVals.primary[i].val;
     }
     for (int i = 0; i < secondaryWeaponVars; i++) {
-        *(uint32_t*)(deployedSecondaryWeaponAddress + deployedSecondaryWeaponOffsetsAndVars[i].fst) = deployedSecondaryWeaponOffsetsAndVars[i].thd;
+        *(uint32_t*)(vars->baseAddresses.secondary + vars->offsetsNVals.secondary[i].offset) = vars->offsetsNVals.secondary[i].val;
     }
     if (ammoTypeHasBullet(fetchDeployedPrimaryAmmoTypeAddress)) {
         for (int i = 0; i < primaryBulletVars; i++) {
-            *(uint32_t*)(deployedPrimaryBulletAddress + deployedPrimaryBulletOffsetsAndVars[i].fst) = deployedPrimaryBulletOffsetsAndVars[i].thd;
+            *(uint32_t*)(vars->baseAddresses.primaryBullet + vars->offsetsNVals.primaryBullet[i].offset) = vars->offsetsNVals.primaryBullet[i].val;
         }
     }
     if (ammoTypeHasBullet(fetchDeployedSecondaryAmmoTypeAddress)) {
         for (int i = 0; i < secondaryBulletVars; i++) {
-            *(uint32_t*)(deployedSecondaryBulletAddress + deployedSecondaryBulletOffsetsAndVars[i].fst) = deployedSecondaryBulletOffsetsAndVars[i].thd;
+            *(uint32_t*)(vars->baseAddresses.secondaryBullet + vars->offsetsNVals.secondaryBullet[i].offset) = vars->offsetsNVals.secondaryBullet[i].val;
         }
     }
 }
 
 //Resets weapon var structs in case of weapon change or game state is in a menu where upgrades should reset
-void resetWeaponVars(){
+void resetWeaponVars(varStruct* vars){
     char buffer[256];
     //snprintf(buffer, 100, "%#016x", fetchDeployedPrimaryWeaponAddress);
     //MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
@@ -536,84 +317,82 @@ void resetWeaponVars(){
         );
     
     //Should refactor but w/e
-    //Reset Mech Vars and set new defaults
-    if (curDeployedMechAddress != deployedMechAddress || shouldReset) {
+    //Reset Mech Vars and set new orgs
+    if (curDeployedMechAddress != NULL && curDeployedMechAddress != vars->baseAddresses.mech) {
         for (int i = 0; i < mechVars; i++) {
-            if (deployedMechAddress != NULL) {
-                *(uint32_t*)(deployedMechAddress + deployedMechOffsetsAndVars[i].fst) = deployedMechOffsetsAndVars[i].snd;
+            if (vars->baseAddresses.mech != NULL) {
+                *(uint32_t*)(vars->baseAddresses.mech + vars->offsetsNVals.mech[i].offset) = vars->offsetsNVals.mech[i].org;
             }
-            deployedMechOffsetsAndVars[i].snd = *(uint32_t*)(curDeployedMechAddress + deployedMechOffsetsAndVars[i].fst);
-            deployedMechOffsetsAndVars[i].thd = deployedMechOffsetsAndVars[i].snd;
+            vars->offsetsNVals.mech[i].org = *(uint32_t*)(curDeployedMechAddress + vars->offsetsNVals.mech[i].offset);
+            vars->offsetsNVals.mech[i].val = vars->offsetsNVals.mech[i].org;
         }
-        deployedMechAddress = curDeployedMechAddress;
+        vars->baseAddresses.mech = curDeployedMechAddress;
     }
 
-    //Reset Mech Legs Vars and set new defaults
-    if (curDeployedMechLegsAddress != deployedMechLegsAddress || shouldReset) {
+    //Reset Mech Legs Vars and set new orgs
+    if (curDeployedMechLegsAddress != NULL && curDeployedMechLegsAddress != vars->baseAddresses.mechLegs) {
         for (int i = 0; i < mechLegsVars; i++) {
-            if (deployedMechLegsAddress != NULL) {
-                *(uint32_t*)(deployedMechLegsAddress + deployedMechLegsOffsetsAndVars[i].fst) = deployedMechLegsOffsetsAndVars[i].snd;
+            if (vars->baseAddresses.mechLegs != NULL) {
+                *(uint32_t*)(vars->baseAddresses.mechLegs + vars->offsetsNVals.mechLegs[i].offset) = vars->offsetsNVals.mechLegs[i].org;
             }
-            deployedMechLegsOffsetsAndVars[i].snd = *(uint32_t*)(curDeployedMechLegsAddress + deployedMechLegsOffsetsAndVars[i].fst);
-            deployedMechLegsOffsetsAndVars[i].thd = deployedMechLegsOffsetsAndVars[i].snd;
+            vars->offsetsNVals.mechLegs[i].org = *(uint32_t*)(curDeployedMechLegsAddress + vars->offsetsNVals.mechLegs[i].offset);
+            vars->offsetsNVals.mechLegs[i].val = vars->offsetsNVals.mechLegs[i].org;
         }
-        deployedMechLegsAddress = curDeployedMechLegsAddress;
+        vars->baseAddresses.mechLegs = curDeployedMechLegsAddress;
     }
 
-    //Reset Primary Weapon Vars and set new defaults
-    if (curDeployedPrimaryWeaponAddress != deployedPrimaryWeaponAddress || shouldReset) {
+    //Reset Primary Weapon Vars and set new orgs
+    if (curDeployedPrimaryWeaponAddress != NULL && curDeployedPrimaryWeaponAddress != vars->baseAddresses.primary) {
         for (int i = 0; i < primaryWeaponVars; i++) {
-            if (deployedPrimaryWeaponAddress != NULL) {
-                *(uint32_t*)(deployedPrimaryWeaponAddress + deployedPrimaryWeaponOffsetsAndVars[i].fst) = deployedPrimaryWeaponOffsetsAndVars[i].snd;
+            if (vars->baseAddresses.primary != NULL) {
+                *(uint32_t*)(vars->baseAddresses.primary + vars->offsetsNVals.primary[i].offset) = vars->offsetsNVals.primary[i].org;
             }
-            deployedPrimaryWeaponOffsetsAndVars[i].snd = *(uint32_t*)(curDeployedPrimaryWeaponAddress + deployedPrimaryWeaponOffsetsAndVars[i].fst);
-            deployedPrimaryWeaponOffsetsAndVars[i].thd = deployedPrimaryWeaponOffsetsAndVars[i].snd;
+            vars->offsetsNVals.primary[i].org = *(uint32_t*)(curDeployedPrimaryWeaponAddress + vars->offsetsNVals.primary[i].offset);
+            vars->offsetsNVals.primary[i].val = vars->offsetsNVals.primary[i].org;
         }
-        deployedPrimaryWeaponAddress = curDeployedPrimaryWeaponAddress;
+        vars->baseAddresses.primary = curDeployedPrimaryWeaponAddress;
     }
 
-    //Reset Secondary Weapon Vars and set new defaults
-    if (curDeployedSecondaryWeaponAddress != deployedSecondaryWeaponAddress) {
+    //Reset Secondary Weapon Vars and set new orgs
+    if (curDeployedSecondaryWeaponAddress != NULL && curDeployedSecondaryWeaponAddress != vars->baseAddresses.secondary) {
         for (int i = 0; i < secondaryWeaponVars; i++) {
-            if (deployedSecondaryWeaponAddress != NULL) {
-                *(uint32_t*)(deployedSecondaryWeaponAddress + deployedSecondaryWeaponOffsetsAndVars[i].fst) = deployedSecondaryWeaponOffsetsAndVars[i].snd;
+            if (vars->baseAddresses.secondary != NULL) {
+                *(uint32_t*)(vars->baseAddresses.secondary + vars->offsetsNVals.secondary[i].offset) = vars->offsetsNVals.secondary[i].org;
             }
-            deployedSecondaryWeaponOffsetsAndVars[i].snd = *(uint32_t*)(curDeployedSecondaryWeaponAddress + deployedSecondaryWeaponOffsetsAndVars[i].fst);
-            deployedSecondaryWeaponOffsetsAndVars[i].thd = deployedSecondaryWeaponOffsetsAndVars[i].snd;
+            vars->offsetsNVals.secondary[i].org = *(uint32_t*)(curDeployedSecondaryWeaponAddress + vars->offsetsNVals.secondary[i].offset);
+            vars->offsetsNVals.secondary[i].val = vars->offsetsNVals.secondary[i].org;
         }
-        deployedSecondaryWeaponAddress = curDeployedSecondaryWeaponAddress;
+        vars->baseAddresses.secondary = curDeployedSecondaryWeaponAddress;
     }
 
-    //Reset Primary Bullet Vars and set new defaults
+    //Reset Primary Bullet Vars and set new orgs
     if (ammoTypeHasBullet(fetchDeployedPrimaryAmmoTypeAddress)) {
-        if (curDeployedPrimaryBulletAddress != deployedPrimaryBulletAddress) {
+        if (curDeployedPrimaryBulletAddress != NULL && curDeployedPrimaryBulletAddress != vars->baseAddresses.primaryBullet) {
             for (int i = 0; i < primaryBulletVars; i++) {
-                if (deployedPrimaryBulletAddress != NULL) {
-                    *(uint32_t*)(deployedPrimaryBulletAddress + deployedPrimaryBulletOffsetsAndVars[i].fst) = deployedPrimaryBulletOffsetsAndVars[i].snd;
+                if (vars->baseAddresses.primaryBullet != NULL) {
+                    *(uint32_t*)(vars->baseAddresses.primaryBullet + vars->offsetsNVals.primaryBullet[i].offset) = vars->offsetsNVals.primaryBullet[i].org;
                 }
-                deployedPrimaryBulletOffsetsAndVars[i].snd = *(uint32_t*)(curDeployedPrimaryBulletAddress + deployedPrimaryBulletOffsetsAndVars[i].fst);
-                deployedPrimaryBulletOffsetsAndVars[i].thd = deployedPrimaryBulletOffsetsAndVars[i].snd;
+                vars->offsetsNVals.primaryBullet[i].org = *(uint32_t*)(curDeployedPrimaryBulletAddress + vars->offsetsNVals.primaryBullet[i].offset);
+                vars->offsetsNVals.primaryBullet[i].val = vars->offsetsNVals.primaryBullet[i].org;
             }
-            deployedPrimaryBulletAddress = curDeployedPrimaryBulletAddress;
+            vars->baseAddresses.primaryBullet = curDeployedPrimaryBulletAddress;
         }
     }
 
-    //Reset Secondary Bullet Vars and set new defaults
+    //Reset Secondary Bullet Vars and set new orgs
     if (ammoTypeHasBullet(fetchDeployedSecondaryAmmoTypeAddress)) {
-        if (curDeployedSecondaryBulletAddress != deployedSecondaryBulletAddress) {
+        if (curDeployedSecondaryBulletAddress != NULL && curDeployedSecondaryBulletAddress != vars->baseAddresses.secondaryBullet) {
             for (int i = 0; i < secondaryBulletVars; i++) {
-                if (deployedSecondaryBulletAddress != NULL) {
-                    *(uint32_t*)(deployedSecondaryBulletAddress + deployedSecondaryBulletOffsetsAndVars[i].fst) = deployedSecondaryBulletOffsetsAndVars[i].snd;
+                if (vars->baseAddresses.secondaryBullet != NULL) {
+                    *(uint32_t*)(vars->baseAddresses.secondaryBullet + vars->offsetsNVals.secondaryBullet[i].offset) = vars->offsetsNVals.secondaryBullet[i].org;
                 }
-                deployedSecondaryBulletOffsetsAndVars[i].snd = *(uint32_t*)(curDeployedSecondaryBulletAddress + deployedSecondaryBulletOffsetsAndVars[i].fst);
-                deployedSecondaryBulletOffsetsAndVars[i].thd = deployedSecondaryBulletOffsetsAndVars[i].snd;
+                vars->offsetsNVals.secondaryBullet[i].org = *(uint32_t*)(curDeployedSecondaryBulletAddress + vars->offsetsNVals.secondaryBullet[i].offset);
+                vars->offsetsNVals.secondaryBullet[i].val = vars->offsetsNVals.secondaryBullet[i].org;
             }
-            deployedSecondaryBulletAddress = curDeployedSecondaryBulletAddress;
+            vars->baseAddresses.secondaryBullet = curDeployedSecondaryBulletAddress;
         }
     } 
 }
-
-#define moneyBase GetBaseModuleForProcess() + 0x4fdea0
 
 double getMoney() {
     double* dVar2 = (double*)(moneyBase + 0xa4b8);
@@ -700,11 +479,8 @@ bool subtractMoney(double subtractAmount) {
     }
 }
 
-#define offsetUsedToFetchPlayerAddress 0x2ba0
-#define addressUsedToFetchPlayerAddress *(uint64_t*)(*(uint64_t*)keyAddress + offsetUsedToFetchPlayerAddress)
-
 //#define getPlayerAddressFunctionOffset 0x1542f0
-//#define getPlayerAddressFunction GetBaseModuleForProcess() + getPlayerAddressFunctionOffset
+//#define getPlayerAddressFunction baseModule + getPlayerAddressFunctionOffset
 //Function created by combining functions brigador.exe+0x1542f0 and brigador.exe+0x16580
 uint64_t getPlayerAddress() {
     long long* entry = (long long*)addressUsedToFetchPlayerAddress;
@@ -752,41 +528,145 @@ uint64_t getPlayerHealth() {
     return 0;
 }
 
-
-float playerHealthToAdd = 0;
-void handlePlayerHealth() {
-    if (playerHealthToAdd > 0 && fetchCurrentState == InGame) {
-        if (getPlayerHealth() != 0) {
-            *(float*)getPlayerHealthAddress += playerHealthToAdd;
-            playerHealthToAdd = 0;
-        }
+//Function should result in repair amount always being added safely while keeping track of current in-game player health. 
+void handlePlayerHealth(upgradeStruct* upgradeState) {
+    if (getPlayerHealth() != 0 && fetchCurrentState == InGame) {
+        *(float*)getPlayerHealthAddress += upgradeState->repairAmount;
+        upgradeState->repairAmount = 0;
     }
 }
 
-#define upgradesPerLevel 3
-uint64_t consumedUpgrades = 0;
-bool shouldRandomizeUpgrades = true;
+double getUpgradeCost(buttons buttonToHandle, upgradeStruct* upgradeState) {
+    return upgradeState->upgradesCost[buttonToHandle] * upgradeState->consumed * 10;
+}
 
-std::random_device rd;  // a seed source for the random number engine
-std::mt19937 gen(rd()); // mersenne_twister_engine seeded with rd()
-std::uniform_int_distribution<> distrib(0, addedButtons - 1);
 
-void setupUpgradeList() {
-    if (shouldRandomizeUpgrades && fetchCurrentState == FreelancerChooseDistrict) {
+//Formats the strings in addedButtonStrings to be used when displaying buttons
+//Should be called after any on the variables used to format the strings are altered.
+void formatButtonStrings(upgradeStruct* upgradeState) {
+    for (int i = 0; i < addedButtons; i++) {
+       switch ((buttons)i) {
+       case M_Repair:
+           snprintf(upgradeState->formattedButtonStrings[i], 
+               maxButtonStringLength, 
+               addedButtonStrings[i], 
+               repairHealthPoints, 
+               (long long)(getUpgradeCost((buttons)i, upgradeState)/1000));
+           break;
+       case M_PosOvercharge:
+           snprintf(upgradeState->formattedButtonStrings[i],
+               maxButtonStringLength,
+               addedButtonStrings[i],
+               overchargeMult,
+               (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
+           break;
+       case M_PosForwardSpeed:
+           snprintf(upgradeState->formattedButtonStrings[i],
+               maxButtonStringLength,
+               addedButtonStrings[i],
+               forwardSpeedMult,
+               (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
+           break;
+       case P_PosCapacity: // Primary: +Capacity
+           snprintf(upgradeState->formattedButtonStrings[i],
+               maxButtonStringLength,
+               addedButtonStrings[i],
+               pCapacityMult,
+               (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
+           break;
+       case P_PosFireRate: // Primary: +Fire Rate
+           snprintf(upgradeState->formattedButtonStrings[i],
+               maxButtonStringLength,
+               addedButtonStrings[i],
+               pFireRateMult,
+               (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
+           break;
+       case P_PosProjectilesNegAccuracy: // Primary: +Projectiles, -Accuracy
+           snprintf(upgradeState->formattedButtonStrings[i],
+               maxButtonStringLength,
+               addedButtonStrings[i],
+               pProjectiles,
+               pAccuracy,
+               (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
+           break;
+       case P_PosPropMult: // Primary: +Structure Damage
+           snprintf(upgradeState->formattedButtonStrings[i],
+               maxButtonStringLength,
+               addedButtonStrings[i],
+               pPropMult,
+               (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
+           break;
+       case S_PosCapacity: // Secondary: +Capacity
+           snprintf(upgradeState->formattedButtonStrings[i],
+               maxButtonStringLength,
+               addedButtonStrings[i],
+               sCapacityMult,
+               (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
+           break;
+       case S_PosFireRate: // Secondary: +Fire Rate
+           snprintf(upgradeState->formattedButtonStrings[i],
+               maxButtonStringLength,
+               addedButtonStrings[i],
+               sFireRateMult,
+               (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
+           break;
+       case S_PosProjectilesNegAccuracy: // Secondary: +Projectiles, -Accuracy
+           snprintf(upgradeState->formattedButtonStrings[i],
+               maxButtonStringLength,
+               addedButtonStrings[i],
+               sProjectiles,
+               sAccuracy,
+               (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
+           break;
+       case S_PosPropMult: // Secondary: +Structure Damage
+           snprintf(upgradeState->formattedButtonStrings[i],
+               maxButtonStringLength,
+               addedButtonStrings[i],
+               sPropMult,
+               (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
+           break;
+       default:
+           MessageBoxA(NULL, "Error: Undefined button tried to be formatted. ", "ALIVE", MB_OK);
+           return;
+       }
+    }
+}
+
+//Updates the list with available upgrades and the state.
+//Should be called each time a button has been used or availableUpgrades has been updated
+void updateAvailableUpgrades(upgradeStruct* upgradeState) {
+    formatButtonStrings(upgradeState);
+    for (int i = 0; i < upgradeState->availableCount - upgradeState->removedUpgrades; i++) {
+        if (getUpgradeCost(upgradeState->availableUpgrades->buttonIndex[i], upgradeState) > getMoney()) {
+            for (int n = i + 1; n < upgradeState->availableCount - upgradeState->removedUpgrades; n++) {
+                upgradeState->availableUpgrades->upgradeText[n - 1] = upgradeState->availableUpgrades->upgradeText[n];
+                upgradeState->availableUpgrades->buttonIndex[n - 1] = upgradeState->availableUpgrades->buttonIndex[n];
+            }
+            i--;
+            upgradeState->removedUpgrades++;
+        }
+    }
+    writeBytesToDeployedAsm(&addButtonsChooseDistrict, (upgradeState->availableCount-upgradeState->removedUpgrades), 10, 8);
+}
+
+//Randomizes the list of upgrade buttons that should be shown
+void setupUpgradeList(upgradeStruct* upgradeState, rngStruct* rng) {
+    //Randomize once
+    if (upgradeState->randomizeUpgrades && fetchCurrentState == FreelancerChooseDistrict) {
         //Setup always available upgrades
-        for (int n = 0; n < alwaysAvailableUpgradeCount; n++) {
-            upgradeList.buttonIndex[n] = alwaysAvailableUpgradesButtons[n];
-            upgradeList.upgradeText[n] = (char*)addedButtonStrings[alwaysAvailableUpgradesButtons[n]];
+        for (int n = 0; n < upgradeState->alwaysAvailableCount; n++) {
+            upgradeState->availableUpgrades->buttonIndex[n] = upgradeState->alwaysAvailableButtons[n];
+            upgradeState->availableUpgrades->upgradeText[n] = (char*)upgradeState->formattedButtonStrings[upgradeState->alwaysAvailableButtons[n]];
         }
 
         //Generate unique random numbers and setup upgradeList
-        for (int n = alwaysAvailableUpgradeCount; n < upgradeSelectionCount; n++) {
-            upgradeList.buttonIndex[n] = (buttons)distrib(gen);
-            upgradeList.upgradeText[n] = (char*)addedButtonStrings[upgradeList.buttonIndex[n]];
+        for (int n = upgradeState->alwaysAvailableCount; n < upgradeState->availableCount; n++) {
+            upgradeState->availableUpgrades->buttonIndex[n] = (buttons)rng->distrib(rng->gen);
+            upgradeState->availableUpgrades->upgradeText[n] = (char*)upgradeState->formattedButtonStrings[upgradeState->availableUpgrades->buttonIndex[n]];
             //Ensure the number is unique
             bool unique = true;
             for (int i = n - 1; i > -1; i--) {
-                if (upgradeList.buttonIndex[n] == upgradeList.buttonIndex[i]) {
+                if (upgradeState->availableUpgrades->buttonIndex[n] == upgradeState->availableUpgrades->buttonIndex[i]) {
                     unique = false;
                     break;
                 }
@@ -795,122 +675,93 @@ void setupUpgradeList() {
                 n--;
             }
         }
-        shouldRandomizeUpgrades = false;
-        consumedUpgrades = 0;
-        writeBytesToDeployedAsm(&addButtonsChooseDistrict, upgradeSelectionCount, 10, 8);
+        upgradeState->randomizeUpgrades = false;
+        upgradeState->consumed = 0;
+        upgradeState->removedUpgrades = 0;
+        updateAvailableUpgrades(upgradeState);
     }
-    else if (!shouldRandomizeUpgrades && fetchCurrentState != FreelancerChooseDistrict) {
-        shouldRandomizeUpgrades = true;
+    //Prepare to randomize when player next enters the choose district menu.
+    else if (!upgradeState->randomizeUpgrades && fetchCurrentState != FreelancerChooseDistrict) {
+        upgradeState->randomizeUpgrades = true;
     }
 }
 
-#define repairCost  010000*consumedUpgrades*10
-#define upgradeCost 025000*consumedUpgrades*10
-//#define repairCost  000000*consumedUpgrades*10
-//#define upgradeCost 000000*consumedUpgrades*10
-
-
-void handlePressedButton(buttons buttonToHandle) {
+//Logic for upgrade / button press handling
+void handlePressedButton(buttons buttonToHandle, upgradeStruct* upgradeState, varStruct* vars) {
     float refloat;
-    switch (buttonToHandle) {
-    case M_Repair:
-        if (subtractMoney(repairCost)) {
-            playerHealthToAdd += 50;
-        }
-        break;
-    case M_PosOvercharge:
-        if (subtractMoney(upgradeCost)) {
-            refloat = reinterpret_cast<float&>(deployedMechOffsetsAndVars[MaxOverchargeIdx].thd);
+    if (subtractMoney(getUpgradeCost(buttonToHandle, upgradeState))) {
+        upgradeState->consumed++;
+        switch (buttonToHandle) {
+        case M_Repair:
+            upgradeState->repairAmount += 50;
+            /*
+            if (upgradeState->playerHealth + repairAmount <= upgradeState->maxHealth)
+                upgradeState->playerHealth += repairAmount;
+            else
+                upgradeState->playerHealth = upgradeState->maxHealth;
+            */
+            break;
+        case M_PosOvercharge:
+            refloat = reinterpret_cast<float&>(vars->offsetsNVals.mech[MaxOverchargeIdx].val);
             refloat *= 1.1;
-            deployedMechOffsetsAndVars[MaxOverchargeIdx].thd = reinterpret_cast<uint32_t&>(refloat);
-        }
-        break;
-    case M_PosForwardSpeed:
-        if (subtractMoney(upgradeCost)) {
-            refloat = reinterpret_cast<float&>(deployedMechLegsOffsetsAndVars[MaxForwardSpeedIdx].thd);
+            vars->offsetsNVals.mech[MaxOverchargeIdx].val = reinterpret_cast<uint32_t&>(refloat);
+            break;
+        case M_PosForwardSpeed:
+            refloat = reinterpret_cast<float&>(vars->offsetsNVals.mechLegs[MaxForwardSpeedIdx].val);
             refloat *= 1.1;
-            deployedMechLegsOffsetsAndVars[MaxForwardSpeedIdx].thd = reinterpret_cast<uint32_t&>(refloat);
-        }
-        break;
-    case P_PosCapacity: // Primary: +Capacity
-        if (subtractMoney(upgradeCost)) {
-            deployedPrimaryWeaponOffsetsAndVars[CapacityIdx].thd = (uint32_t)(deployedPrimaryWeaponOffsetsAndVars[CapacityIdx].thd * 1.2);
-        }
-        break;
-    case P_PosFireRate: // Primary: +Fire Rate
-        if (subtractMoney(upgradeCost)) {
-            refloat = reinterpret_cast<float&>(deployedPrimaryWeaponOffsetsAndVars[CooldownIdx].thd);
+            vars->offsetsNVals.mechLegs[MaxForwardSpeedIdx].val = reinterpret_cast<uint32_t&>(refloat);
+            break;
+        case P_PosCapacity: // Primary: +Capacity
+            vars->offsetsNVals.primary[CapacityIdx].val = (uint32_t)(vars->offsetsNVals.primary[CapacityIdx].val * 1.2);
+            break;
+        case P_PosFireRate: // Primary: +Fire Rate
+            refloat = reinterpret_cast<float&>(vars->offsetsNVals.primary[CooldownIdx].val);
             refloat *= 0.9;
-            deployedPrimaryWeaponOffsetsAndVars[CooldownIdx].thd = reinterpret_cast<uint32_t&>(refloat);
-        }
-        break;
-    case P_PosProjectilesNegAccuracy: // Primary: +Projectiles, -Accuracy
-        if (subtractMoney(upgradeCost)) {
-            deployedPrimaryWeaponOffsetsAndVars[ShotCountIdx].thd = (uint32_t)((int)deployedPrimaryWeaponOffsetsAndVars[ShotCountIdx].thd + 1);
-            refloat = reinterpret_cast<float&>(deployedPrimaryWeaponOffsetsAndVars[AccuracyIdx].thd);
-            refloat += 0.017; //1 degree added to guarantee accuracy is degraded even if it was previously 0.
+            vars->offsetsNVals.primary[CooldownIdx].val = reinterpret_cast<uint32_t&>(refloat);
+            break;
+        case P_PosProjectilesNegAccuracy: // Primary: +Projectiles, -Accuracy
+            vars->offsetsNVals.primary[ShotCountIdx].val = (uint32_t)((int)vars->offsetsNVals.primary[ShotCountIdx].val + 1);
+            refloat = reinterpret_cast<float&>(vars->offsetsNVals.primary[AccuracyIdx].val);
+            refloat += 5*0.017; //+5 degrees
+            //refloat *= 1.1;
+            vars->offsetsNVals.primary[AccuracyIdx].val = reinterpret_cast<uint32_t&>(refloat);
+            break;
+        case P_PosPropMult: // Primary: +Structure Damage
+            refloat = reinterpret_cast<float&>(vars->offsetsNVals.primaryBullet[PropMultIdx].val);
             refloat *= 1.1;
-            deployedPrimaryWeaponOffsetsAndVars[AccuracyIdx].thd = reinterpret_cast<uint32_t&>(refloat);
-        }
-        break;
-    case P_PosPropMult: // Primary: +Structure Damage
-        if (subtractMoney(upgradeCost)) {
-            refloat = reinterpret_cast<float&>(deployedPrimaryBulletOffsetsAndVars[PropMultIdx].thd);
-            refloat *= 1.1;
-            deployedPrimaryBulletOffsetsAndVars[PropMultIdx].thd = reinterpret_cast<uint32_t&>(refloat);
-        }
-        break;
-    case S_PosCapacity: // Secondary: +Capacity
-        if (subtractMoney(upgradeCost)) {
-            deployedSecondaryWeaponOffsetsAndVars[CapacityIdx].thd = (uint32_t)(deployedSecondaryWeaponOffsetsAndVars[CapacityIdx].thd * 1.2);
-        }
-        break;
-    case S_PosFireRate: // Secondary: +Fire Rate
-        if (subtractMoney(upgradeCost)) {
-            refloat = reinterpret_cast<float&>(deployedSecondaryWeaponOffsetsAndVars[CooldownIdx].thd);
+            vars->offsetsNVals.primaryBullet[PropMultIdx].val = reinterpret_cast<uint32_t&>(refloat);
+            break;
+        case S_PosCapacity: // Secondary: +Capacity
+            vars->offsetsNVals.secondary[CapacityIdx].val = (uint32_t)(vars->offsetsNVals.secondary[CapacityIdx].val * 1.2);
+            break;
+        case S_PosFireRate: // Secondary: +Fire Rate
+            refloat = reinterpret_cast<float&>(vars->offsetsNVals.secondary[CooldownIdx].val);
             refloat *= 0.9;
-            deployedSecondaryWeaponOffsetsAndVars[CooldownIdx].thd = reinterpret_cast<uint32_t&>(refloat);
-        }
-        break;
-    case S_PosProjectilesNegAccuracy: // Secondary: +Projectiles, -Accuracy
-        if (subtractMoney(upgradeCost)) {
-            deployedSecondaryWeaponOffsetsAndVars[ShotCountIdx].thd = (uint32_t)((int)deployedSecondaryWeaponOffsetsAndVars[ShotCountIdx].thd + 1);
-            refloat = reinterpret_cast<float&>(deployedSecondaryWeaponOffsetsAndVars[AccuracyIdx].thd);
-            refloat += 0.017; //1 degree added to guarantee accuracy is degraded even if it was previously 0.
+            vars->offsetsNVals.secondary[CooldownIdx].val = reinterpret_cast<uint32_t&>(refloat);
+            break;
+        case S_PosProjectilesNegAccuracy: // Secondary: +Projectiles, -Accuracy
+            vars->offsetsNVals.secondary[ShotCountIdx].val = (uint32_t)((int)vars->offsetsNVals.secondary[ShotCountIdx].val + 1);
+            refloat = reinterpret_cast<float&>(vars->offsetsNVals.secondary[AccuracyIdx].val);
+            refloat += 5*0.017; //+5 degrees.
+            //refloat *= 1.1;
+            vars->offsetsNVals.secondary[AccuracyIdx].val = reinterpret_cast<uint32_t&>(refloat);
+            break;
+        case S_PosPropMult: // Secondary: +Structure Damage
+            refloat = reinterpret_cast<float&>(vars->offsetsNVals.secondaryBullet[PropMultIdx].val);
             refloat *= 1.1;
-            deployedSecondaryWeaponOffsetsAndVars[AccuracyIdx].thd = reinterpret_cast<uint32_t&>(refloat);
+            vars->offsetsNVals.secondaryBullet[PropMultIdx].val = reinterpret_cast<uint32_t&>(refloat);
+            break;
+        default:
+            MessageBoxA(NULL, "Error: Undefined button pressed. ", "ALIVE", MB_OK);
+            return;
         }
-        break;
-    case S_PosPropMult: // Secondary: +Structure Damage
-        if (subtractMoney(upgradeCost)) {
-            refloat = reinterpret_cast<float&>(deployedSecondaryBulletOffsetsAndVars[PropMultIdx].thd);
-            refloat *= 1.1;
-            deployedSecondaryBulletOffsetsAndVars[PropMultIdx].thd = reinterpret_cast<uint32_t&>(refloat);
-        }
-        break;
-    default:
-        MessageBoxA(NULL, "Error: Undefined button pressed. ", "ALIVE", MB_OK);
-        return;
-    }
-
-    consumedUpgrades++;
-
-    /*
-    if (upgradesPerLevel <= consumedUpgrades) {
-        writeBytesToDeployedAsm(&addButtonsChooseDistrict, 0, 10, 8);
-    }
-    */    
-
-    double currentMoney = getMoney();
-    if (currentMoney < repairCost && currentMoney < upgradeCost) {
-        writeBytesToDeployedAsm(&addButtonsChooseDistrict, 0, 10, 8);
+        updateAvailableUpgrades(upgradeState);
     }
 }
 
-#define districtItemSize 0x2110
 
 //Handles a player's action on the choose district menu in freelancer by observing the state of the currently selected button
-void handleChooseDistrictMenu() {
+void handleChooseDistrictMenu(upgradeStruct* upgradeState, varStruct* vars) {
     if (addButtonsChooseDistrict.isDeployed && fetchCurrentState == FreelancerChooseDistrict) {
         char buffer[256];
 
@@ -933,14 +784,14 @@ void handleChooseDistrictMenu() {
                 closestOriginalDistrictItemAddress = (selectedDistrictItemAddress - (distanceFromOriginalItem * districtItemSize));
             }
 
-            buttons buttonToHandle = upgradeList.buttonIndex[distanceFromOriginalItem - 1];
+            buttons buttonToHandle = upgradeState->availableUpgrades->buttonIndex[distanceFromOriginalItem - 1];
             //buttons buttonToHandle = (buttons)(distanceFromOriginalItem - 1);
 
             //Handle the pressed mod button
-            handlePressedButton(buttonToHandle);
+            handlePressedButton(buttonToHandle, upgradeState, vars);
             
             //Update weapon vars in memory
-            setWeaponVars();
+            setWeaponVars(vars);
 
             //Reset selected button to index 0 
             memset((void*)chooseDistrictMenuStruct, 0x0, 2);
@@ -949,28 +800,52 @@ void handleChooseDistrictMenu() {
     return;
 }
 
-#define fetchFreelancerSelectedMechAddress (*(uint64_t*)(*(uint64_t*)keyAddress+stateStructOffset)+0x128+0x18+(0x35*0x88))
-#define fetchFreelancerSelectedPrimaryWeaponAddress (*(uint64_t*)(*(uint64_t*)keyAddress+stateStructOffset)+0x128+0x18+(0x36*0x88))
-#define fetchFreelancerSelectedSecondaryWeaponAddress (*(uint64_t*)(*(uint64_t*)keyAddress+stateStructOffset)+0x128+0x18+(0x37*0x88))
-
-const enum freelancerMenuStates {
-    Pilot,
-    Vehicle,
-    Primary,
-    Secondary,
-    Special,
-    Operation
-};
-
-//Both of these paths are the same but using the one that is more similar to fetchFreelancerSelectedMechAddress
-//#define fetchFreelancerMenuState (freelancerMenuStates)*(uint32_t*)(0x1b18+(*(uint64_t*)(*(uint64_t*)keyAddress + stateStructOffset))+0x128)
-#define fetchFreelancerMenuState (freelancerMenuStates)*(uint32_t*)(*(uint64_t*)(*(uint64_t*)keyAddress + stateStructOffset) + 0x128 + (0x33 * 0x88))
-
-
 DWORD WINAPI MainThread(LPVOID param) {
     char buffer[256];
+
+    //Setup variables struct
+    varBaseAddresses deployedBaseAddresses{0,0,0,0,0,0 };
+    offsetsAndVals deployedOffsetsAndVals{
+        deployedMechOffsetsAndVals,
+        deployedMechLegsOffsetsAndVals,
+        deployedPrimaryWeaponOffsetsAndVals,
+        deployedSecondaryWeaponOffsetsAndVals,
+        deployedPrimaryBulletOffsetsAndVals,
+        deployedSecondaryBulletOffsetsAndVals
+    };
+    varStruct variablesStruct{ deployedBaseAddresses, deployedOffsetsAndVals };
+
+    //Repair is set to always show up
+    const buttons alwaysAvailableUpgradesButtons[] = { M_Repair };
+
+    //Setup buffers for formatted strings to be shown by added buttons
+    char formattedButtonStrings[addedButtons][maxButtonStringLength];
+
+    //Setup upgrade state struct
+    upgradeStruct upgradeState{
+        &upgradeList,
+        formattedButtonStrings,
+        baseButtonCosts,
+        sizeof(alwaysAvailableUpgradesButtons) / sizeof(alwaysAvailableUpgradesButtons[0]),
+        alwaysAvailableUpgradesButtons,
+        4,
+        5,
+        0,
+        0,
+        true,
+        0
+    };
+
+    //Setup rng
+    std::random_device rd;  // a seed source for the random number engine
+    std::mt19937 gen(rd()); // mersenne_twister_engine seeded with rd()
+    std::uniform_int_distribution<> distrib(0, addedButtons - 1);
+
+    rngStruct rng{ gen, distrib };
+
     while (true) {
-        _SetOtherThreadsSuspended(true);
+        //Uncomment this and the unsuspend at the end of the loop if race conditions cause issues
+        //_SetOtherThreadsSuspended(true);
 
         /*
         if (GetAsyncKeyState(VK_NUMPAD1) & 0x80000) {
@@ -997,9 +872,9 @@ DWORD WINAPI MainThread(LPVOID param) {
             /*
             //Execute present function in brigador.exe to get the correct money value.
             typedef double function(uint64_t);
-            uint64_t functionAddress = GetBaseModuleForProcess() + 0x595a0;
+            uint64_t functionAddress = baseModule + 0x595a0;
             double (*getMoney)(uint64_t) = (function*)(functionAddress);
-            double money = getMoney(GetBaseModuleForProcess() + 0x4fdea0);
+            double money = getMoney(baseModule + 0x4fdea0);
             snprintf(buffer, 100, "Money = %e", money);
             MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
             snprintf(buffer, 100, "Current State = %u", fetchCurrentState);
@@ -1017,21 +892,21 @@ DWORD WINAPI MainThread(LPVOID param) {
         }
 
         //Update playerHealth to the modded value
-        handlePlayerHealth();
+        handlePlayerHealth(&upgradeState);
 
         //Reset modded weapon vars if changes to weapon addresses or certain game states are observed.
-        resetWeaponVars();
+        resetWeaponVars(&variablesStruct);
 
         //Handle logic in freelancer menu
         //handleFreelancerMenu();
 
         //Randomize the list of available upgrades
-        setupUpgradeList();
+        setupUpgradeList(&upgradeState, &rng);
 
         //Handle logic in freelancer choose district menu
-        handleChooseDistrictMenu();
+        handleChooseDistrictMenu(&upgradeState, &variablesStruct);
 
-        _SetOtherThreadsSuspended(false);
+        //_SetOtherThreadsSuspended(false);
 
         Sleep(100);
     }
@@ -1045,6 +920,7 @@ BOOL APIENTRY DllMain( HMODULE hModule,
     switch (ul_reason_for_call)
     {
     case DLL_PROCESS_ATTACH:
+        baseModule = GetBaseModuleForProcess();
         //MessageBoxA(NULL, "DLL injected", "DLL injected", MB_OK);
         applyPatches();
         CreateThread(0, 0, MainThread, hModule, 0, 0);
