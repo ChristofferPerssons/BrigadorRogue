@@ -53,7 +53,7 @@ const char* addedButtonStrings[] = {
 
 //Cost relate to the button with the same index in addedButtonStrings
 const double baseButtonCosts[addedButtons]{
-    1000
+    500000
     , 1000000
     , 1000000
     , 1000000
@@ -162,15 +162,14 @@ struct offsetsAndVals {
 struct varStruct {
     varBaseAddresses baseAddresses;
     offsetsAndVals offsetsNVals;
+    bool shouldResetResources;
 };
 
-#define maxAvailableUpgrades 32
 struct upgrades {
     char* upgradeText[maxAvailableUpgrades];
     buttons buttonIndex[maxAvailableUpgrades];
 };
 
-#define maxButtonStringLength 256
 struct upgradeStruct {
     upgrades* availableUpgrades;
     char (*formattedButtonStrings)[maxButtonStringLength];
@@ -249,132 +248,87 @@ bool ammoTypeHasBullet(unsigned char* ammoTypeAddress) {
     return false;
 }
 
-//Copies stored weapon var values to game memory
-void setWeaponVars(varStruct* vars) {
-    char buffer[256];
-    //Should refactor but w/e
-    for (int i = 0; i < mechVars; i++) {
-        //snprintf(buffer, 100, "%#016x, %#016x", (uint32_t*)(deployedMechAddress + deployedMechOffsetsAndVars[i].offset), deployedMechOffsetsAndVars[i].val);
-        //MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
-        *(uint32_t*)(vars->baseAddresses.mech + vars->offsetsNVals.mech[i].offset) = vars->offsetsNVals.mech[i].val;
-    }
-    for (int i = 0; i < mechLegsVars; i++) {
-        *(uint32_t*)(vars->baseAddresses.mechLegs + vars->offsetsNVals.mechLegs[i].offset) = vars->offsetsNVals.mechLegs[i].val;
-    }
-    for (int i = 0; i < primaryWeaponVars; i++) {
-        *(uint32_t*)(vars->baseAddresses.primary + vars->offsetsNVals.primary[i].offset) = vars->offsetsNVals.primary[i].val;
-    }
-    for (int i = 0; i < secondaryWeaponVars; i++) {
-        *(uint32_t*)(vars->baseAddresses.secondary + vars->offsetsNVals.secondary[i].offset) = vars->offsetsNVals.secondary[i].val;
-    }
-    if (ammoTypeHasBullet(fetchDeployedPrimaryAmmoTypeAddress)) {
-        for (int i = 0; i < primaryBulletVars; i++) {
-            *(uint32_t*)(vars->baseAddresses.primaryBullet + vars->offsetsNVals.primaryBullet[i].offset) = vars->offsetsNVals.primaryBullet[i].val;
-        }
-    }
-    if (ammoTypeHasBullet(fetchDeployedSecondaryAmmoTypeAddress)) {
-        for (int i = 0; i < secondaryBulletVars; i++) {
-            *(uint32_t*)(vars->baseAddresses.secondaryBullet + vars->offsetsNVals.secondaryBullet[i].offset) = vars->offsetsNVals.secondaryBullet[i].val;
-        }
+void updateVars(uint64_t baseAddress, uthruple* offsetsNVals, uint64_t varCount) {
+    for (int i = 0; i < varCount; i++) {
+        *(uint32_t*)(baseAddress + offsetsNVals[i].offset) = offsetsNVals[i].val;
     }
 }
 
-//Resets weapon var structs in case of weapon change or game state is in a menu where upgrades should reset
-void resetWeaponVars(varStruct* vars){
-    char buffer[256];
-    //snprintf(buffer, 100, "%#016x", fetchDeployedPrimaryWeaponAddress);
-    //MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
-    uint64_t curDeployedMechAddress = fetchDeployedMechAddress;
-    uint64_t curDeployedMechLegsAddress = fetchDeployedMechLegsAddress;
-    uint64_t curDeployedPrimaryWeaponAddress = fetchDeployedPrimaryWeaponAddress;
-    uint64_t curDeployedSecondaryWeaponAddress = fetchDeployedSecondaryWeaponAddress;
-    uint64_t curDeployedPrimaryBulletAddress = fetchDeployedPrimaryBulletAddress;
-    uint64_t curDeployedSecondaryBulletAddress = fetchDeployedSecondaryBulletAddress;
+//Copies stored weapon var values to game memory
+void updateResources(varStruct* vars) {
+    updateVars(vars->baseAddresses.mech, vars->offsetsNVals.mech, mechVars);
+    updateVars(vars->baseAddresses.mechLegs, vars->offsetsNVals.mechLegs, mechLegsVars);
+    updateVars(vars->baseAddresses.primary, vars->offsetsNVals.primary, primaryWeaponVars);
+    updateVars(vars->baseAddresses.secondary, vars->offsetsNVals.secondary, secondaryWeaponVars);
+    if (ammoTypeHasBullet(fetchDeployedPrimaryAmmoTypeAddress)) {
+        updateVars(vars->baseAddresses.primaryBullet, vars->offsetsNVals.primaryBullet, primaryBulletVars);
+    }
+    if (ammoTypeHasBullet(fetchDeployedSecondaryAmmoTypeAddress)) {
+        updateVars(vars->baseAddresses.secondaryBullet, vars->offsetsNVals.secondaryBullet, secondaryBulletVars);
+    }
+}
 
+void resetVars(uint64_t* baseAddress, uthruple* offsetsNVals, uint64_t varCount, uint64_t deployedResourceAddress) {
+    for (int i = 0; i < varCount; i++) {
+        if (*baseAddress != NULL) {
+            *(uint32_t*)(*baseAddress + offsetsNVals[i].offset) = offsetsNVals[i].org;
+        }
+        offsetsNVals[i].org = *(uint32_t*)(deployedResourceAddress + offsetsNVals[i].offset);
+        offsetsNVals[i].val = offsetsNVals[i].org;
+    }
+    *baseAddress = deployedResourceAddress;
+}
+
+//Resets weapon var structs in case of weapon change or game state is in a menu where upgrades should reset
+void resetResources(varStruct* vars){
+    char buffer[256];
     states currentState = fetchCurrentState;
     bool shouldReset = (
-        currentState == MainMenu || 
-        currentState == Campaign || 
-        currentState == Freelancer || 
-        currentState == Aquisitions || 
+        currentState == MainMenu ||
+        currentState == Campaign ||
+        currentState == Freelancer ||
+        currentState == Aquisitions ||
         currentState == LoseScreen
         );
-    
-    //Should refactor but w/e
-    //Reset Mech Vars and set new orgs
-    if (curDeployedMechAddress != NULL && (curDeployedMechAddress != vars->baseAddresses.mech || shouldReset)) {
-        for (int i = 0; i < mechVars; i++) {
-            if (vars->baseAddresses.mech != NULL) {
-                *(uint32_t*)(vars->baseAddresses.mech + vars->offsetsNVals.mech[i].offset) = vars->offsetsNVals.mech[i].org;
-            }
-            vars->offsetsNVals.mech[i].org = *(uint32_t*)(curDeployedMechAddress + vars->offsetsNVals.mech[i].offset);
-            vars->offsetsNVals.mech[i].val = vars->offsetsNVals.mech[i].org;
-        }
-        vars->baseAddresses.mech = curDeployedMechAddress;
-    }
 
-    //Reset Mech Legs Vars and set new orgs
-    if (curDeployedMechLegsAddress != NULL && (curDeployedMechLegsAddress != vars->baseAddresses.mechLegs || shouldReset)) {
-        for (int i = 0; i < mechLegsVars; i++) {
-            if (vars->baseAddresses.mechLegs != NULL) {
-                *(uint32_t*)(vars->baseAddresses.mechLegs + vars->offsetsNVals.mechLegs[i].offset) = vars->offsetsNVals.mechLegs[i].org;
-            }
-            vars->offsetsNVals.mechLegs[i].org = *(uint32_t*)(curDeployedMechLegsAddress + vars->offsetsNVals.mechLegs[i].offset);
-            vars->offsetsNVals.mechLegs[i].val = vars->offsetsNVals.mechLegs[i].org;
-        }
-        vars->baseAddresses.mechLegs = curDeployedMechLegsAddress;
-    }
+    if (vars->shouldResetResources) {
+        uint64_t curDeployedMechAddress = fetchDeployedMechAddress;
+        uint64_t curDeployedMechLegsAddress = fetchDeployedMechLegsAddress;
+        uint64_t curDeployedPrimaryWeaponAddress = fetchDeployedPrimaryWeaponAddress;
+        uint64_t curDeployedSecondaryWeaponAddress = fetchDeployedSecondaryWeaponAddress;
+        uint64_t curDeployedPrimaryBulletAddress = fetchDeployedPrimaryBulletAddress;
+        uint64_t curDeployedSecondaryBulletAddress = fetchDeployedSecondaryBulletAddress;
 
-    //Reset Primary Weapon Vars and set new orgs
-    if (curDeployedPrimaryWeaponAddress != NULL && (curDeployedPrimaryWeaponAddress != vars->baseAddresses.primary || shouldReset)) {
-        for (int i = 0; i < primaryWeaponVars; i++) {
-            if (vars->baseAddresses.primary != NULL) {
-                *(uint32_t*)(vars->baseAddresses.primary + vars->offsetsNVals.primary[i].offset) = vars->offsetsNVals.primary[i].org;
-            }
-            vars->offsetsNVals.primary[i].org = *(uint32_t*)(curDeployedPrimaryWeaponAddress + vars->offsetsNVals.primary[i].offset);
-            vars->offsetsNVals.primary[i].val = vars->offsetsNVals.primary[i].org;
-        }
-        vars->baseAddresses.primary = curDeployedPrimaryWeaponAddress;
-    }
+        //Should refactor but w/e
+        //Reset Mech Vars and set new orgs
+        resetVars(&vars->baseAddresses.mech, vars->offsetsNVals.mech, mechVars, curDeployedMechAddress);
 
-    //Reset Secondary Weapon Vars and set new orgs
-    if (curDeployedSecondaryWeaponAddress != NULL && (curDeployedSecondaryWeaponAddress != vars->baseAddresses.secondary || shouldReset)) {
-        for (int i = 0; i < secondaryWeaponVars; i++) {
-            if (vars->baseAddresses.secondary != NULL) {
-                *(uint32_t*)(vars->baseAddresses.secondary + vars->offsetsNVals.secondary[i].offset) = vars->offsetsNVals.secondary[i].org;
-            }
-            vars->offsetsNVals.secondary[i].org = *(uint32_t*)(curDeployedSecondaryWeaponAddress + vars->offsetsNVals.secondary[i].offset);
-            vars->offsetsNVals.secondary[i].val = vars->offsetsNVals.secondary[i].org;
-        }
-        vars->baseAddresses.secondary = curDeployedSecondaryWeaponAddress;
-    }
+        //Reset Mech Legs Vars and set new orgs
+        resetVars(&vars->baseAddresses.mechLegs, vars->offsetsNVals.mechLegs, mechLegsVars, curDeployedMechLegsAddress);
 
-    //Reset Primary Bullet Vars and set new orgs
-    if (ammoTypeHasBullet(fetchDeployedPrimaryAmmoTypeAddress)) {
-        if (curDeployedPrimaryBulletAddress != NULL && (curDeployedPrimaryBulletAddress != vars->baseAddresses.primaryBullet || shouldReset)) {
-            for (int i = 0; i < primaryBulletVars; i++) {
-                if (vars->baseAddresses.primaryBullet != NULL) {
-                    *(uint32_t*)(vars->baseAddresses.primaryBullet + vars->offsetsNVals.primaryBullet[i].offset) = vars->offsetsNVals.primaryBullet[i].org;
-                }
-                vars->offsetsNVals.primaryBullet[i].org = *(uint32_t*)(curDeployedPrimaryBulletAddress + vars->offsetsNVals.primaryBullet[i].offset);
-                vars->offsetsNVals.primaryBullet[i].val = vars->offsetsNVals.primaryBullet[i].org;
-            }
-            vars->baseAddresses.primaryBullet = curDeployedPrimaryBulletAddress;
-        }
-    }
+        //Reset Primary Weapon Vars and set new orgs
+        resetVars(&vars->baseAddresses.primary, vars->offsetsNVals.primary, primaryWeaponVars, curDeployedPrimaryWeaponAddress);
 
-    //Reset Secondary Bullet Vars and set new orgs
-    if (ammoTypeHasBullet(fetchDeployedSecondaryAmmoTypeAddress)) {
-        if (curDeployedSecondaryBulletAddress != NULL && (curDeployedSecondaryBulletAddress != vars->baseAddresses.secondaryBullet || shouldReset)) {
-            for (int i = 0; i < secondaryBulletVars; i++) {
-                if (vars->baseAddresses.secondaryBullet != NULL) {
-                    *(uint32_t*)(vars->baseAddresses.secondaryBullet + vars->offsetsNVals.secondaryBullet[i].offset) = vars->offsetsNVals.secondaryBullet[i].org;
-                }
-                vars->offsetsNVals.secondaryBullet[i].org = *(uint32_t*)(curDeployedSecondaryBulletAddress + vars->offsetsNVals.secondaryBullet[i].offset);
-                vars->offsetsNVals.secondaryBullet[i].val = vars->offsetsNVals.secondaryBullet[i].org;
-            }
-            vars->baseAddresses.secondaryBullet = curDeployedSecondaryBulletAddress;
+
+        //Reset Secondary Weapon Vars and set new orgs
+        resetVars(&vars->baseAddresses.secondary, vars->offsetsNVals.secondary, secondaryWeaponVars, curDeployedSecondaryWeaponAddress);
+
+        //Reset Primary Bullet Vars and set new orgs
+        if (ammoTypeHasBullet(fetchDeployedPrimaryAmmoTypeAddress)) {
+            resetVars(&vars->baseAddresses.primaryBullet, vars->offsetsNVals.primaryBullet, primaryBulletVars, curDeployedPrimaryBulletAddress);
         }
+
+        //Reset Secondary Bullet Vars and set new orgs
+        if (ammoTypeHasBullet(fetchDeployedSecondaryAmmoTypeAddress)) {
+            resetVars(&vars->baseAddresses.secondaryBullet, vars->offsetsNVals.secondaryBullet, secondaryBulletVars, curDeployedSecondaryBulletAddress);
+        }
+
+        //Stop updating when choose district state has been entered
+        if (currentState == FreelancerChooseDistrict)
+            vars->shouldResetResources = false;
+    }
+    else if (shouldReset){
+        vars->shouldResetResources = true;
     } 
 }
 
@@ -470,35 +424,37 @@ bool subtractMoney(double subtractAmount) {
 //#define getPlayerAddressFunction baseModule + getPlayerAddressFunctionOffset
 //Function created by combining functions brigador.exe+0x1542f0 and brigador.exe+0x16580
 uint64_t getPlayerAddress() {
-    long long* entry = (long long*)addressUsedToFetchPlayerAddress;
-
     //Check for uninitialized player
-    if ((long long*)addressUsedToFetchPlayerAddress == NULL || (long long**)(*entry + 0x1b8c8) == NULL || (int**)(*entry + 0x1b8f8) == NULL) {
-        return 0;
-    }
+    if ((*(uint64_t*)keyAddress + offsetUsedToFetchPlayerAddress) != NULL) {
+        long long* entry = (long long*)*(uint64_t*)(*(uint64_t*)keyAddress + offsetUsedToFetchPlayerAddress);
+        //Check for uninitialized player
+        if (entry == NULL || (long long**)(*entry + 0x1b8c8) == NULL || (int**)(*entry + 0x1b8f8) == NULL) {
+            return 0;
+        }
 
-    long long* param_1 = *(long long**)(*entry + 0x1b8c8);
+        long long* param_1 = *(long long**)(*entry + 0x1b8c8);
 
-    int param_2 = 0;
-    int* param_3 = *(int**)(*entry + 0x1b8f8);
+        int param_2 = 0;
+        int* param_3 = *(int**)(*entry + 0x1b8f8);
 
 
-    long long lVar1;
-    long long lVar2;
-    unsigned long long uVar3;
-    unsigned long long uVar4;
+        long long lVar1;
+        long long lVar2;
+        unsigned long long uVar3;
+        unsigned long long uVar4;
 
-    uVar3 = (unsigned long long)*param_3;
-    if (*param_3 == param_2) {
-        lVar1 = *param_1;
-        if (uVar3 < (unsigned long long)((param_1[1] - lVar1) / 0x30)) {
-            uVar4 = (unsigned long long)param_3[1];
-            lVar2 = *(long long*)(lVar1 + uVar3 * 0x30);
-            if (((uVar4 < (unsigned long long)(*(long long*)(lVar1 + 8 + uVar3 * 0x30) - lVar2 >> 4)) &&
-                (*(int*)(lVar2 + uVar4 * 0x10) == param_3[2])) &&
-                (*(long long*)(lVar2 + 8 + uVar4 * 0x10) != 0)) {
-                //MessageBoxA(NULL, "Found Player Address", "ALIVE", MB_OK);
-                return *(uint64_t*)(lVar2 + 8 + uVar4 * 0x10);
+        uVar3 = (unsigned long long) * param_3;
+        if (*param_3 == param_2) {
+            lVar1 = *param_1;
+            if (uVar3 < (unsigned long long)((param_1[1] - lVar1) / 0x30)) {
+                uVar4 = (unsigned long long)param_3[1];
+                lVar2 = *(long long*)(lVar1 + uVar3 * 0x30);
+                if (((uVar4 < (unsigned long long)(*(long long*)(lVar1 + 8 + uVar3 * 0x30) - lVar2 >> 4)) &&
+                    (*(int*)(lVar2 + uVar4 * 0x10) == param_3[2])) &&
+                    (*(long long*)(lVar2 + 8 + uVar4 * 0x10) != 0)) {
+                    //MessageBoxA(NULL, "Found Player Address", "ALIVE", MB_OK);
+                    return *(uint64_t*)(lVar2 + 8 + uVar4 * 0x10);
+                }
             }
         }
     }
@@ -517,7 +473,7 @@ uint64_t getPlayerHealth() {
 
 //Function should result in repair amount always being added safely while keeping track of current in-game player health. 
 void handlePlayerHealth(upgradeStruct* upgradeState) {
-    if (getPlayerHealth() != 0 && fetchCurrentState == InGame) {
+    if (fetchCurrentState == InGame && getPlayerHealth() != 0) {
         *(float*)getPlayerHealthAddress += upgradeState->repairAmount;
         upgradeState->repairAmount = 0;
     }
@@ -778,7 +734,7 @@ void handleChooseDistrictMenu(upgradeStruct* upgradeState, varStruct* vars) {
             handlePressedButton(buttonToHandle, upgradeState, vars);
             
             //Update weapon vars in memory
-            setWeaponVars(vars);
+            updateResources(vars);
 
             //Reset selected button to index 0 
             memset((void*)chooseDistrictMenuStruct, 0x0, 2);
@@ -791,7 +747,8 @@ DWORD WINAPI MainThread(LPVOID param) {
     char buffer[256];
 
     //Setup variables struct
-    varBaseAddresses deployedBaseAddresses{0,0,0,0,0,0 };
+    varBaseAddresses deployedBaseAddresses{ 0, 0, 0, 0, 0, 0 };
+
     offsetsAndVals deployedOffsetsAndVals{
         deployedMechOffsetsAndVals,
         deployedMechLegsOffsetsAndVals,
@@ -800,7 +757,7 @@ DWORD WINAPI MainThread(LPVOID param) {
         deployedPrimaryBulletOffsetsAndVals,
         deployedSecondaryBulletOffsetsAndVals
     };
-    varStruct variablesStruct{ deployedBaseAddresses, deployedOffsetsAndVals };
+    varStruct variablesStruct{ deployedBaseAddresses, deployedOffsetsAndVals , false};
 
     //Repair is set to always show up
     const buttons alwaysAvailableUpgradesButtons[] = { M_Repair };
@@ -843,7 +800,6 @@ DWORD WINAPI MainThread(LPVOID param) {
             }
         }
         */
-
         if (GetAsyncKeyState(VK_NUMPAD1) & 0x80000) {
             addMoney(1000000);
             snprintf(buffer, 100, "freelancerMenuState = %llx", (uint32_t)fetchFreelancerMenuState);
@@ -883,8 +839,8 @@ DWORD WINAPI MainThread(LPVOID param) {
         //Update playerHealth to the modded value
         handlePlayerHealth(&upgradeState);
 
-        //Reset modded weapon vars if changes to weapon addresses or certain game states are observed.
-        resetWeaponVars(&variablesStruct);
+        //Reset modded weapon vars if certain game states are observed.
+        resetResources(&variablesStruct);
 
         //Handle logic in freelancer menu
         //handleFreelancerMenu();

@@ -95,9 +95,18 @@ const enum freelancerMenuStates {
 //Both of these paths are the same but using the one that is more similar to fetchFreelancerSelectedMechAddress
 //#define fetchFreelancerMenuState (freelancerMenuStates)*(uint32_t*)(0x1b18+(*(uint64_t*)(*(uint64_t*)keyAddress + stateStructOffset))+0x128)
 #define fetchFreelancerMenuState (freelancerMenuStates)*(uint32_t*)(*(uint64_t*)(*(uint64_t*)keyAddress + stateStructOffset) + 0x128 + (0x33 * 0x88))
-
 #define offsetUsedToFetchPlayerAddress 0x2ba0
-#define addressUsedToFetchPlayerAddress *(uint64_t*)(*(uint64_t*)keyAddress + offsetUsedToFetchPlayerAddress)
 
 #define moneyBase baseModule + 0x4fdea0
 
+#define mechResourceBytes 4632
+//Weapon types differ in size. Max seems to be laser weapons at 1608 bytes
+#define maxWeaponResourceBytes 1608
+
+#define maxAvailableUpgrades 32
+
+#define maxButtonStringLength 256
+
+#define mechResourceBytes 4632
+
+#define maxWeaponResourceBytes 1608
