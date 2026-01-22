@@ -16,4 +16,5 @@ Information:
 Bugs:
 * Exiting the application may result in a crash, and/or crash message. I do not know precisely why this is the case but it should not cause any issues.
 * Deploying with the same weapon in both the primary and secondary slots leads to no effect by primary upgrades and secondary upgrades affecting both weapons.
+* Laser and flame weapons (more specifically weapons that do not use bullet resources) see no change when the structural damage upgrade is purchased.
 * There will be more bugs.
