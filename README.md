@@ -1,6 +1,6 @@
 __Brigador Rogue__
 
-This mod enables random upgrades between each freelancer district.
+This mod enables random upgrades between each freelancer district. Read the readme in the BrigadorRogue/docs folder for more information.
 
 
 __Code__
