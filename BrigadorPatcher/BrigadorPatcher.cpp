@@ -84,16 +84,17 @@ uint32_t defaultConstants[operationsToPatch]{
     0x00200000
 };
 
+#define allocatedSizeMult 2
 uint32_t patchedConstants[operationsToPatch]{
-    defaultConstants[0] * 2,
-    defaultConstants[1] * 2,
-    defaultConstants[2] * 2,
-    defaultConstants[3] * 2,
-    defaultConstants[4] * 2,
-    defaultConstants[5] * 2,
-    defaultConstants[6] * 2,
-    defaultConstants[7] * 2,
-    defaultConstants[8] * 2,
+    defaultConstants[0] * allocatedSizeMult,
+    defaultConstants[1] * allocatedSizeMult,
+    defaultConstants[2] * allocatedSizeMult,
+    defaultConstants[3] * allocatedSizeMult,
+    defaultConstants[4] * allocatedSizeMult,
+    defaultConstants[5] * allocatedSizeMult,
+    defaultConstants[6] * allocatedSizeMult,
+    defaultConstants[7] * allocatedSizeMult,
+    defaultConstants[8] * allocatedSizeMult,
 };
 
 

@@ -33,6 +33,7 @@ const enum buttons {
     , S_PosFireRate
     , S_PosProjectilesNegAccuracy
     , S_PosPropMult
+    , Reload
 };
 
 //Must correspond to buttons enum
@@ -48,6 +49,7 @@ const char* addedButtonStrings[] = {
     , {"S: Fire Rate +%.1fx $%lld k"}
     , {"S: Projectiles +%d Accuracy -%d $%lld k"}
     , {"S: Structure +%.1fx $%lld k"}
+    //, {"Reload"}
 };
 #define addedButtons sizeof(addedButtonStrings) / sizeof(addedButtonStrings[0])
 
@@ -64,6 +66,7 @@ const double baseButtonCosts[addedButtons]{
     , 1000000
     , 1000000
     , 1000000
+    //, 0 
 };
 
 //Values used to determine upgrade magnitude
@@ -104,7 +107,7 @@ uthruple deployedMechLegsOffsetsAndVals[] = {
 };
 #define mechLegsVars sizeof(deployedMechLegsOffsetsAndVals) / sizeof (deployedMechLegsOffsetsAndVals[0])
 
-//Weapons
+//Weapons variables. Must correspond to to same index in weaponVarsTemplate definition.
 const enum weaponVarIdx {
     CapacityIdx,
     CooldownIdx,
@@ -112,59 +115,68 @@ const enum weaponVarIdx {
     AccuracyIdx
 };
 
-uthruple deployedPrimaryWeaponOffsetsAndVals[] = {
-    {weaponVarsOffset + weaponCapacityOffset, 0x0, 0x0} //Capacity
-    ,{weaponVarsOffset + weaponCooldownOffset, 0x0, 0x0} //Cooldown
-    ,{weaponVarsOffset + weaponShotCountOffset, 0x0, 0x0} //Shot Count
-    ,{weaponVarsOffset + weaponAccuracyOffset, 0x0, 0x0} //Accuracy Cone Width
-};
-#define primaryWeaponVars sizeof(deployedPrimaryWeaponOffsetsAndVals) / sizeof(deployedPrimaryWeaponOffsetsAndVals[0])
+#define weaponVarsTemplate  {{weaponVarsOffset + weaponCapacityOffset, 0x0, 0x0}, { weaponVarsOffset + weaponCooldownOffset, 0x0, 0x0 },{ weaponVarsOffset + weaponShotCountOffset, 0x0, 0x0 },{ weaponVarsOffset + weaponAccuracyOffset, 0x0, 0x0 }}
 
-uthruple deployedSecondaryWeaponOffsetsAndVals[] = {
-    {weaponVarsOffset + weaponCapacityOffset, 0x0, 0x0} //Capacity
-    ,{weaponVarsOffset + weaponCooldownOffset, 0x0, 0x0} //Cooldown
-    ,{weaponVarsOffset + weaponShotCountOffset, 0x0, 0x0} //Shot Count
-    ,{weaponVarsOffset + weaponAccuracyOffset, 0x0, 0x0} //Accuracy Cone Width
-};
-#define secondaryWeaponVars sizeof(deployedSecondaryWeaponOffsetsAndVals) / sizeof(deployedSecondaryWeaponOffsetsAndVals[0])
+uthruple deployedWeaponOffsetsAndValsTemplate[] = weaponVarsTemplate;
 
-//Bullets
+#define weaponVars sizeof(deployedWeaponOffsetsAndValsTemplate) / sizeof(deployedWeaponOffsetsAndValsTemplate[0])
+
+uthruple deployedWeaponsOffsetsAndVals[maxWeapons][weaponVars] = {
+    weaponVarsTemplate,
+    weaponVarsTemplate,
+    weaponVarsTemplate,
+    weaponVarsTemplate,
+    weaponVarsTemplate,
+    weaponVarsTemplate,
+    weaponVarsTemplate,
+    weaponVarsTemplate,
+    weaponVarsTemplate
+};
+
+//Weapons variables. Must correspond to to same index in bulletVarsTemplate definition.
 const enum bulletVars {
     PropMultIdx
 };
 
-uthruple deployedPrimaryBulletOffsetsAndVals[] = {
-    {bulletPropMultOffset, 0x0, 0x0} //prop multiplier
-};
-#define primaryBulletVars sizeof(deployedPrimaryBulletOffsetsAndVals) / sizeof(deployedPrimaryBulletOffsetsAndVals[0])
+#define bulletVarsTemplate  {{bulletPropMultOffset, 0x0, 0x0}}
 
-uthruple deployedSecondaryBulletOffsetsAndVals[] = {
-    {bulletPropMultOffset, 0x0, 0x0} //prop multiplier
+uthruple deployedBulletOffsetsAndValsTemplate[] = bulletVarsTemplate;
+
+#define bulletVars sizeof(deployedBulletOffsetsAndValsTemplate) / sizeof(deployedBulletOffsetsAndValsTemplate[0])
+
+uthruple deployedBulletsOffsetsAndVals[maxWeapons][bulletVars] = {
+    bulletVarsTemplate,
+    bulletVarsTemplate,
+    bulletVarsTemplate,
+    bulletVarsTemplate,
+    bulletVarsTemplate,
+    bulletVarsTemplate,
+    bulletVarsTemplate,
+    bulletVarsTemplate,
+    bulletVarsTemplate
 };
-#define secondaryBulletVars sizeof(deployedSecondaryBulletOffsetsAndVals) / sizeof(deployedSecondaryBulletOffsetsAndVals[0])
 
 struct varBaseAddresses {
     uint64_t mech;
     uint64_t mechLegs;
-    uint64_t primary;
-    uint64_t secondary;
-    uint64_t primaryBullet;
-    uint64_t secondaryBullet;
+    uint64_t* weapons;
+    uint64_t* bullets;
 };
 
 struct offsetsAndVals {
     uthruple* mech;
     uthruple* mechLegs;
-    uthruple* primary;
-    uthruple* secondary;
-    uthruple* primaryBullet;
-    uthruple* secondaryBullet;
+    uthruple (*weapons)[weaponVars];
+    uthruple (*bullets)[bulletVars];
 };
 
 struct varStruct {
     varBaseAddresses baseAddresses;
     offsetsAndVals offsetsNVals;
+    int primaryIndex;
+    int secondaryIndex;
     bool shouldResetResources;
+    bool resourceUpdateNecessary;
 };
 
 struct upgrades {
@@ -227,12 +239,29 @@ asmHook createUIButtonUseSetString{
     { {0x0}}  //Must be set before deploying. Should be address to location where addButtonsChooseDistrict stores the address of the nextStringToPrintAddress
 };
 
+asmHook updateGameToNewPlayerResources{
+    "updateGameToNewPlayerResources",
+    208,
+    120,
+    0x6ea6a,
+    13,
+    NULL,
+    1,
+    false,
+    {{125}, {138}, {163}, {176}},
+    { {0xf18d0}, {0x192720}, {0x1311d0}, {0x130440} },
+    {},
+    {}
+};
+
 void applyPatches(void) {
     _SetOtherThreadsSuspended(true);
+
     deployExecutableASM(&addButtonsChooseDistrict);
     uint64_t nextStringToPrintAddress = (addButtonsChooseDistrict.hookTarget + (addButtonsChooseDistrict.fileSize - addButtonsChooseDistrict.bytesToStrip) - addButtonsChooseDistrict.numberOfWritableBytes + 18);
     createUIButtonUseSetString.externalReplacementValues[0] = nextStringToPrintAddress;
     deployExecutableASM(&createUIButtonUseSetString);
+    deployExecutableASM(&updateGameToNewPlayerResources);
     //MessageBoxA(NULL, "Patches injected", "Patches injected", MB_OK);
 
     _SetOtherThreadsSuspended(false);
@@ -241,6 +270,18 @@ void applyPatches(void) {
 void freePatches(void) {
     VirtualFree((LPVOID)addButtonsChooseDistrict.hookTarget, 0, MEM_RELEASE);
     VirtualFree((LPVOID)createUIButtonUseSetString.hookTarget, 0, MEM_RELEASE);
+    VirtualFree((LPVOID)updateGameToNewPlayerResources.hookTarget, 0, MEM_RELEASE);
+}
+
+//Return index to first weapon with the searched for weaponGroup
+int getWeaponIndexOfWeaponGroup(weaponGroups weaponGroup) {
+    for (int i = 0; i < maxWeapons; i++) {
+        weaponGroups curWeaponGroup = (weaponGroups)fetchDeployedWeaponMountGroup(i);
+        if (weaponGroup == curWeaponGroup) {
+            return i;
+        }
+    }
+    return -1;
 }
 
 bool ammoTypeHasBullet(unsigned char* ammoTypeAddress) {
@@ -261,23 +302,31 @@ void updateVars(uint64_t baseAddress, uthruple* offsetsNVals, uint64_t varCount)
 void updateResources(varStruct* vars) {
     updateVars(vars->baseAddresses.mech, vars->offsetsNVals.mech, mechVars);
     updateVars(vars->baseAddresses.mechLegs, vars->offsetsNVals.mechLegs, mechLegsVars);
-    updateVars(vars->baseAddresses.primary, vars->offsetsNVals.primary, primaryWeaponVars);
-    updateVars(vars->baseAddresses.secondary, vars->offsetsNVals.secondary, secondaryWeaponVars);
-    if (ammoTypeHasBullet(fetchDeployedPrimaryAmmoTypeAddress)) {
-        updateVars(vars->baseAddresses.primaryBullet, vars->offsetsNVals.primaryBullet, primaryBulletVars);
-    }
-    if (ammoTypeHasBullet(fetchDeployedSecondaryAmmoTypeAddress)) {
-        updateVars(vars->baseAddresses.secondaryBullet, vars->offsetsNVals.secondaryBullet, secondaryBulletVars);
+    for (int i = 0; i < maxWeapons; i++) {
+        if (vars->baseAddresses.weapons[i] != NULL) {
+            updateVars(vars->baseAddresses.weapons[i], vars->offsetsNVals.weapons[i], weaponVars);
+            if (ammoTypeHasBullet(fetchDeployedWeaponAmmoTypeAddress(i))) {
+                updateVars(vars->baseAddresses.bullets[i], vars->offsetsNVals.bullets[i], bulletVars);
+            }
+        }
     }
 }
 
 void resetVars(uint64_t* baseAddress, uthruple* offsetsNVals, uint64_t varCount, uint64_t deployedResourceAddress) {
+    char buffer[256];
     for (int i = 0; i < varCount; i++) {
         if (*baseAddress != NULL) {
             *(uint32_t*)(*baseAddress + offsetsNVals[i].offset) = offsetsNVals[i].org;
         }
-        offsetsNVals[i].org = *(uint32_t*)(deployedResourceAddress + offsetsNVals[i].offset);
-        offsetsNVals[i].val = offsetsNVals[i].org;
+        if (deployedResourceAddress != NULL) {
+            offsetsNVals[i].org = *(uint32_t*)(deployedResourceAddress + offsetsNVals[i].offset);
+            offsetsNVals[i].val = offsetsNVals[i].org;
+        }
+        else {
+            offsetsNVals[i].org = 0;
+            offsetsNVals[i].val = 0;
+        }
+
     }
     *baseAddress = deployedResourceAddress;
 }
@@ -297,34 +346,33 @@ void resetResources(varStruct* vars){
     if (vars->shouldResetResources) {
         uint64_t curDeployedMechAddress = fetchDeployedMechAddress;
         uint64_t curDeployedMechLegsAddress = fetchDeployedMechLegsAddress;
-        uint64_t curDeployedPrimaryWeaponAddress = fetchDeployedPrimaryWeaponAddress;
-        uint64_t curDeployedSecondaryWeaponAddress = fetchDeployedSecondaryWeaponAddress;
-        uint64_t curDeployedPrimaryBulletAddress = fetchDeployedPrimaryBulletAddress;
-        uint64_t curDeployedSecondaryBulletAddress = fetchDeployedSecondaryBulletAddress;
 
-        //Should refactor but w/e
+        uint64_t curDeployedWeaponAddresses[maxWeapons];
+        uint64_t curDeployedWeaponBulletAddresses[maxWeapons];
+        for (int i = 0; i < maxWeapons; i++) {
+            curDeployedWeaponAddresses[i] = fetchDeployedWeaponAddress(i);
+            curDeployedWeaponBulletAddresses[i] = (uint64_t)fetchDeployedWeaponAmmoTypeAddress(i);
+        }
+
         //Reset Mech Vars and set new orgs
         resetVars(&vars->baseAddresses.mech, vars->offsetsNVals.mech, mechVars, curDeployedMechAddress);
 
         //Reset Mech Legs Vars and set new orgs
         resetVars(&vars->baseAddresses.mechLegs, vars->offsetsNVals.mechLegs, mechLegsVars, curDeployedMechLegsAddress);
 
-        //Reset Primary Weapon Vars and set new orgs
-        resetVars(&vars->baseAddresses.primary, vars->offsetsNVals.primary, primaryWeaponVars, curDeployedPrimaryWeaponAddress);
+        //Reset weapon and associated bullet vars
+        for (int i = 0; i < maxWeapons; i++) {
+            resetVars(&vars->baseAddresses.weapons[i], vars->offsetsNVals.weapons[i], weaponVars, curDeployedWeaponAddresses[i]);
 
-
-        //Reset Secondary Weapon Vars and set new orgs
-        resetVars(&vars->baseAddresses.secondary, vars->offsetsNVals.secondary, secondaryWeaponVars, curDeployedSecondaryWeaponAddress);
-
-        //Reset Primary Bullet Vars and set new orgs
-        if (ammoTypeHasBullet(fetchDeployedPrimaryAmmoTypeAddress)) {
-            resetVars(&vars->baseAddresses.primaryBullet, vars->offsetsNVals.primaryBullet, primaryBulletVars, curDeployedPrimaryBulletAddress);
+            //TODO: Implementation of how to reset bullets vars may be incorrect
+            if (vars->baseAddresses.weapons[i] != NULL && ammoTypeHasBullet(fetchDeployedWeaponAmmoTypeAddress(i))) {
+                resetVars(&vars->baseAddresses.bullets[i], vars->offsetsNVals.bullets[i], bulletVars, curDeployedWeaponBulletAddresses[i]);
+            }
         }
 
-        //Reset Secondary Bullet Vars and set new orgs
-        if (ammoTypeHasBullet(fetchDeployedSecondaryAmmoTypeAddress)) {
-            resetVars(&vars->baseAddresses.secondaryBullet, vars->offsetsNVals.secondaryBullet, secondaryBulletVars, curDeployedSecondaryBulletAddress);
-        }
+        vars->primaryIndex = getWeaponIndexOfWeaponGroup(PrimaryGroup);
+
+        vars->secondaryIndex = getWeaponIndexOfWeaponGroup(SecondaryGroup);
 
         //Stop updating when choose district state has been entered
         if (currentState == FreelancerChooseDistrict)
@@ -423,8 +471,6 @@ bool subtractMoney(double subtractAmount) {
     }
 }
 
-//#define getPlayerAddressFunctionOffset 0x1542f0
-//#define getPlayerAddressFunction baseModule + getPlayerAddressFunctionOffset
 //Function created by combining functions brigador.exe+0x1542f0 and brigador.exe+0x16580
 uint64_t getPlayerAddress() {
     //Check for uninitialized player
@@ -576,6 +622,11 @@ void formatButtonStrings(upgradeStruct* upgradeState) {
                sPropMult,
                (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
            break;
+       case Reload: // Save+Load test
+           snprintf(upgradeState->formattedButtonStrings[i],
+               maxButtonStringLength,
+               addedButtonStrings[i]);
+           break;
        default:
            MessageBoxA(NULL, "Error: Undefined button tried to be formatted. ", "ALIVE", MB_OK);
            return;
@@ -660,46 +711,49 @@ void handlePressedButton(buttons buttonToHandle, upgradeStruct* upgradeState, va
             vars->offsetsNVals.mechLegs[MaxForwardSpeedIdx].val = reinterpret_cast<uint32_t&>(refloat);
             break;
         case P_PosCapacity: // Primary: +Capacity
-            vars->offsetsNVals.primary[CapacityIdx].val += (uint32_t)(vars->offsetsNVals.primary[CapacityIdx].org * (pCapacityMult-1));
+            vars->offsetsNVals.weapons[vars->primaryIndex][CapacityIdx].val += (uint32_t)(vars->offsetsNVals.weapons[vars->primaryIndex][CapacityIdx].org * (pCapacityMult-1));
             break;
         case P_PosFireRate: // Primary: +Fire Rate
-            refloat = reinterpret_cast<float&>(vars->offsetsNVals.primary[CooldownIdx].val);
+            refloat = reinterpret_cast<float&>(vars->offsetsNVals.weapons[vars->primaryIndex][CooldownIdx].val);
             refloat *= 1 - pFireRateMult;
-            refloat += reinterpret_cast<float&>(vars->offsetsNVals.primary[CooldownIdx].val);
-            vars->offsetsNVals.primary[CooldownIdx].val = reinterpret_cast<uint32_t&>(refloat);
+            refloat += reinterpret_cast<float&>(vars->offsetsNVals.weapons[vars->primaryIndex][CooldownIdx].val);
+            vars->offsetsNVals.weapons[vars->primaryIndex][CooldownIdx].val = reinterpret_cast<uint32_t&>(refloat);
             break;
         case P_PosProjectilesNegAccuracy: // Primary: +Projectiles, -Accuracy
-            vars->offsetsNVals.primary[ShotCountIdx].val += pProjectiles;
-            refloat = reinterpret_cast<float&>(vars->offsetsNVals.primary[AccuracyIdx].val);
+            vars->offsetsNVals.weapons[vars->primaryIndex][ShotCountIdx].val += pProjectiles;
+            refloat = reinterpret_cast<float&>(vars->offsetsNVals.weapons[vars->primaryIndex][AccuracyIdx].val);
             refloat += pAccuracy*0.017; //+degrees
-            vars->offsetsNVals.primary[AccuracyIdx].val = reinterpret_cast<uint32_t&>(refloat);
+            vars->offsetsNVals.weapons[vars->primaryIndex][AccuracyIdx].val = reinterpret_cast<uint32_t&>(refloat);
             break;
         case P_PosPropMult: // Primary: +Structure Damage
-            refloat = reinterpret_cast<float&>(vars->offsetsNVals.primaryBullet[PropMultIdx].org);
+            refloat = reinterpret_cast<float&>(vars->offsetsNVals.bullets[vars->primaryIndex][PropMultIdx].org);
             refloat *= pPropMult-1;
-            refloat += reinterpret_cast<float&>(vars->offsetsNVals.primaryBullet[PropMultIdx].val);
-            vars->offsetsNVals.primaryBullet[PropMultIdx].val += reinterpret_cast<uint32_t&>(refloat);
+            refloat += reinterpret_cast<float&>(vars->offsetsNVals.bullets[vars->primaryIndex][PropMultIdx].val);
+            vars->offsetsNVals.bullets[vars->primaryIndex][PropMultIdx].val += reinterpret_cast<uint32_t&>(refloat);
             break;
         case S_PosCapacity: // Secondary: +Capacity
-            vars->offsetsNVals.secondary[CapacityIdx].val += (uint32_t)(vars->offsetsNVals.secondary[CapacityIdx].org * (sCapacityMult-1));
+            vars->offsetsNVals.weapons[vars->secondaryIndex][CapacityIdx].val += (uint32_t)(vars->offsetsNVals.weapons[vars->secondaryIndex][CapacityIdx].org * (sCapacityMult-1));
             break;
         case S_PosFireRate: // Secondary: +Fire Rate
-            refloat = reinterpret_cast<float&>(vars->offsetsNVals.secondary[CooldownIdx].val);
+            refloat = reinterpret_cast<float&>(vars->offsetsNVals.weapons[vars->secondaryIndex][CooldownIdx].val);
             refloat *= 1-sFireRateMult;
-            refloat += reinterpret_cast<float&>(vars->offsetsNVals.secondary[CooldownIdx].val);
-            vars->offsetsNVals.secondary[CooldownIdx].val -= reinterpret_cast<uint32_t&>(refloat);
+            refloat += reinterpret_cast<float&>(vars->offsetsNVals.weapons[vars->secondaryIndex][CooldownIdx].val);
+            vars->offsetsNVals.weapons[vars->secondaryIndex][CooldownIdx].val -= reinterpret_cast<uint32_t&>(refloat);
             break;
         case S_PosProjectilesNegAccuracy: // Secondary: +Projectiles, -Accuracy
-            vars->offsetsNVals.secondary[ShotCountIdx].val += pProjectiles;
-            refloat = reinterpret_cast<float&>(vars->offsetsNVals.secondary[AccuracyIdx].val);
+            vars->offsetsNVals.weapons[vars->secondaryIndex][ShotCountIdx].val += pProjectiles;
+            refloat = reinterpret_cast<float&>(vars->offsetsNVals.weapons[vars->secondaryIndex][AccuracyIdx].val);
             refloat += sAccuracy*0.017; //+degrees.
-            vars->offsetsNVals.secondary[AccuracyIdx].val = reinterpret_cast<uint32_t&>(refloat);
+            vars->offsetsNVals.weapons[vars->secondaryIndex][AccuracyIdx].val = reinterpret_cast<uint32_t&>(refloat);
             break;
         case S_PosPropMult: // Secondary: +Structure Damage
-            refloat = reinterpret_cast<float&>(vars->offsetsNVals.secondaryBullet[PropMultIdx].org);
+            refloat = reinterpret_cast<float&>(vars->offsetsNVals.bullets[vars->secondaryIndex][PropMultIdx].org);
             refloat *= sPropMult-1;
-            refloat += reinterpret_cast<float&>(vars->offsetsNVals.primaryBullet[PropMultIdx].val);
-            vars->offsetsNVals.secondaryBullet[PropMultIdx].val += reinterpret_cast<uint32_t&>(refloat);
+            refloat += reinterpret_cast<float&>(vars->offsetsNVals.bullets[vars->secondaryIndex][PropMultIdx].val);
+            vars->offsetsNVals.bullets[vars->secondaryIndex][PropMultIdx].val += reinterpret_cast<uint32_t&>(refloat);
+            break;
+        case Reload:
+            vars->resourceUpdateNecessary = true;
             break;
         default:
             MessageBoxA(NULL, "Error: Undefined button pressed. ", "ALIVE", MB_OK);
@@ -713,8 +767,6 @@ void handlePressedButton(buttons buttonToHandle, upgradeStruct* upgradeState, va
 //Handles a player's action on the choose district menu in freelancer by observing the state of the currently selected button
 void handleChooseDistrictMenu(upgradeStruct* upgradeState, varStruct* vars) {
     if (addButtonsChooseDistrict.isDeployed && fetchCurrentState == FreelancerChooseDistrict) {
-        char buffer[256];
-
         uint64_t chooseDistrictMenuStruct = (*(uint64_t*)(*(uint64_t*)keyAddress + stateStructOffset) + 0x128 + 0x3e * 0x88);
         uint32_t chooseDistrictMenuIndex = (*(uint32_t*)chooseDistrictMenuStruct) & 0xffff;   
 
@@ -735,7 +787,6 @@ void handleChooseDistrictMenu(upgradeStruct* upgradeState, varStruct* vars) {
             }
 
             buttons buttonToHandle = upgradeState->availableUpgrades->buttonIndex[distanceFromOriginalItem - 1];
-            //buttons buttonToHandle = (buttons)(distanceFromOriginalItem - 1);
 
             //Handle the pressed mod button
             handlePressedButton(buttonToHandle, upgradeState, vars);
@@ -745,6 +796,10 @@ void handleChooseDistrictMenu(upgradeStruct* upgradeState, varStruct* vars) {
 
             //Reset selected button to index 0 
             memset((void*)chooseDistrictMenuStruct, 0x0, 2);
+
+            if (vars->resourceUpdateNecessary) {
+                writeBytesToDeployedAsm(&updateGameToNewPlayerResources, 0x1, 0, 1);
+            }
         } 
     }
     return;
@@ -753,21 +808,23 @@ void handleChooseDistrictMenu(upgradeStruct* upgradeState, varStruct* vars) {
 DWORD WINAPI MainThread(LPVOID param) {
     char buffer[256];
 
+    uint64_t weaponBaseAddresses[maxWeapons] = { 0 };
+    uint64_t bulletBaseAddresses[maxWeapons] = { 0 };
+
     //Setup variables struct
-    varBaseAddresses deployedBaseAddresses{ 0, 0, 0, 0, 0, 0 };
+    varBaseAddresses deployedBaseAddresses{ 0, 0, weaponBaseAddresses, bulletBaseAddresses};
 
     offsetsAndVals deployedOffsetsAndVals{
         deployedMechOffsetsAndVals,
         deployedMechLegsOffsetsAndVals,
-        deployedPrimaryWeaponOffsetsAndVals,
-        deployedSecondaryWeaponOffsetsAndVals,
-        deployedPrimaryBulletOffsetsAndVals,
-        deployedSecondaryBulletOffsetsAndVals
+        deployedWeaponsOffsetsAndVals,
+        deployedBulletsOffsetsAndVals
     };
-    varStruct variablesStruct{ deployedBaseAddresses, deployedOffsetsAndVals , false};
+
+    varStruct variablesStruct{ deployedBaseAddresses, deployedOffsetsAndVals, -1, -1, false, false};
 
     //Repair is set to always show up
-    const buttons alwaysAvailableUpgradesButtons[] = { M_Repair };
+    const buttons alwaysAvailableUpgradesButtons[] = { M_Repair }; //, Reload };
 
     //Setup buffers for formatted strings to be shown by added buttons
     char formattedButtonStrings[addedButtons][maxButtonStringLength];

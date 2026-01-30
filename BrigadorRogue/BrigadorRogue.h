@@ -32,8 +32,9 @@ const enum states {
 
 #define mechLegsOffset 0x80
 
-#define primaryWeaponOffset (0x2d18+(0x0<<0x5))
-#define secondaryWeaponOffset  (0x2d18+(0x1<<0x5))
+#define weaponOffset(y) (0x2d18+(y<<0x5))
+
+#define weaponMountOffset(y) 0x8+weaponOffset(y)
 
 #define bulletOffset 0x540
 
@@ -44,17 +45,26 @@ const enum states {
 #define fetchDeployedMechLegsAddress  *(uint64_t*)(*(uint64_t*)(*(uint64_t*)keyAddress + mechOffset)+mechLegsOffset)
 #define maxForwardSpeedOffset 0x354
 
-#define fetchDeployedPrimaryWeaponAddress  *(uint64_t*)(*(uint64_t*)keyAddress + primaryWeaponOffset)
-#define fetchDeployedSecondaryWeaponAddress  *(uint64_t*)(*(uint64_t*)keyAddress + secondaryWeaponOffset)
+#define fetchDeployedWeaponAddress(y)  *(uint64_t*)(*(uint64_t*)keyAddress + weaponOffset(y))
 #define weaponVarsOffset 0x3d8
 #define weaponCapacityOffset 0x20
 #define weaponCooldownOffset 0x0
 #define weaponShotCountOffset 0x28
 #define weaponAccuracyOffset 0x10
 
-#define fetchDeployedPrimaryBulletAddress  *(uint64_t*)(*(uint64_t*)(*(uint64_t*)keyAddress + primaryWeaponOffset)+bulletOffset)
-#define fetchDeployedSecondaryBulletAddress *(uint64_t*)(*(uint64_t*)(*(uint64_t*)keyAddress + secondaryWeaponOffset)+bulletOffset)
+#define fetchDeployedWeaponBulletAddress(y)  *(uint64_t*)(*(uint64_t*)(*(uint64_t*)keyAddress + weaponOffset(y))+bulletOffset)
 #define bulletPropMultOffset 0x24
+
+#define fetchDeployedWeaponMountAddress(y) (*(uint64_t*)(*(uint64_t*)keyAddress + weaponMountOffset(y)))
+#define weaponGroupOffset 0x24
+#define fetchDeployedWeaponMountGroup(y) *(unsigned char*)(fetchDeployedWeaponMountAddress(y)+weaponGroupOffset)
+
+const enum weaponGroups {
+    PrimaryGroup,
+    SecondaryGroup,
+    HornGroup,
+    NoneGroup
+};
 
 const enum ammoTypes {
     None = 0x0,
@@ -68,8 +78,7 @@ const enum ammoTypes {
 };
 
 #define ammoTypeOffset 0x48c
-#define fetchDeployedPrimaryAmmoTypeAddress  (unsigned char*)(*(uint64_t*)(*(uint64_t*)keyAddress + primaryWeaponOffset)+ammoTypeOffset)
-#define fetchDeployedSecondaryAmmoTypeAddress  (unsigned char*)(*(uint64_t*)(*(uint64_t*)keyAddress + secondaryWeaponOffset)+ammoTypeOffset)
+#define fetchDeployedWeaponAmmoTypeAddress(x)  (unsigned char*)(*(uint64_t*)(*(uint64_t*)keyAddress + weaponOffset(x))+ammoTypeOffset)
 
 //thruple. Currently used as: offset, 4byte default value, 4byte modded value
 struct uthruple {
@@ -98,6 +107,11 @@ const enum freelancerMenuStates {
 #define fetchFreelancerMenuState (freelancerMenuStates)*(uint32_t*)(*(uint64_t*)(*(uint64_t*)keyAddress + stateStructOffset) + 0x128 + (0x33 * 0x88))
 #define offsetUsedToFetchPlayerAddress 0x2ba0
 
+
+#define offsetUsedToFetchDebugMechMenuParameter 0x224cd8
+#define fetchDebugMechMenuParameter *(uint64*)(baseModule + offsetUsedToFetchDebugMechMenuParameterAddress)
+
+
 #define moneyBase baseModule + 0x4fdea0
 
 #define mechResourceBytes 4632
@@ -111,3 +125,7 @@ const enum freelancerMenuStates {
 #define mechResourceBytes 4632
 
 #define maxWeaponResourceBytes 1608
+
+#define maxWeapons 9
+
+
