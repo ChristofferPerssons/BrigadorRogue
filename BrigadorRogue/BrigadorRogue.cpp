@@ -49,7 +49,7 @@ const char* addedButtonStrings[] = {
     , {"S: Fire Rate +%.1fx $%lld k"}
     , {"S: Projectiles +%d Accuracy -%d $%lld k"}
     , {"S: Structure +%.1fx $%lld k"}
-    //, {"Reload"}
+    , {"Reload"}
 };
 #define addedButtons sizeof(addedButtonStrings) / sizeof(addedButtonStrings[0])
 
@@ -66,7 +66,7 @@ const double baseButtonCosts[addedButtons]{
     , 1000000
     , 1000000
     , 1000000
-    //, 0 
+    , 0 
 };
 
 //Values used to determine upgrade magnitude
@@ -275,13 +275,76 @@ void freePatches(void) {
 
 //Return index to first weapon with the searched for weaponGroup
 int getWeaponIndexOfWeaponGroup(weaponGroups weaponGroup) {
+    char buffer[256];
     for (int i = 0; i < maxWeapons; i++) {
-        weaponGroups curWeaponGroup = (weaponGroups)fetchDeployedWeaponMountGroup(i);
+        weaponGroups curWeaponGroup = (weaponGroups)fetchDeployedWeaponSocketGroup(i);
+        snprintf(buffer, 100, "weaponGroup = %d, searched for = %d", curWeaponGroup, weaponGroup);
+        MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
         if (weaponGroup == curWeaponGroup) {
             return i;
         }
     }
     return -1;
+}
+
+//Updates the memory of the deployed struct to a mew mech and reset weapons to use its assigned default weapons
+//Must be called before trying to save and reload the mech to get valid values after changing the deployed mech
+void setNewMech(varStruct* vars){ //, uint64_t newMechAddress) {
+    char buffer[256];
+
+    //Reset weapon slots
+    for (int i = 0; i < maxWeapons; i++) {
+        fetchDeployedWeaponAddress(i) = 0;
+        fetchDeployedWeaponSocketStringAddress(i) = 0;
+        fetchDeployedWeaponSocketID(i) = 0;
+        fetchDeployedWeaponSocketGroup(i) = 0xFFFFFFFF;
+    }
+    MessageBoxA(NULL, "DeployedWeaponsShouldHaveReset", "ALIVE", MB_OK);
+
+    uint64_t defaultSocketsToHandle = fetchDeployedMechDefaultSocketAmount;
+    uint64_t socketsToHandle = fetchDeployedMechChassisSocketAmount;
+
+    //Set amount of deployed weapons to number of sockets on chassis. 
+    fetchDeployedWeaponCount = socketsToHandle;
+
+    //Set weapons
+    for (uint64_t i = 0; i < socketsToHandle; i++) {
+        uint64_t addressToSet = 0;
+        //Search for a default weapon matching the current socket
+        bool defaultMatchHandled = false;
+        //Only use default for non-primary/secondary weapons. Eg, primary and secondary are persistent across mechs
+        if (fetchDeployedMechChassisSocketWeaponGroup(i) != PrimaryGroup && fetchDeployedMechChassisSocketWeaponGroup(i) != SecondaryGroup) {
+            for (int k = 0; k < defaultSocketsToHandle; k++) {
+                if (strcmp((char*)fetchDeployedMechChassisSocketString(i), (char*)fetchDeployedMechDefaultSocketString(k)) == 0) {
+                    addressToSet = (fetchDeployedMechDefaultSocketWeaponList(k))[0];
+                    defaultMatchHandled = true;
+                }
+            }
+        }
+
+        //Handle if default weapon was not set by using previos deployed weapon with the correct weapon group
+        if (!defaultMatchHandled) {
+            int nonDefaultweaponGroup = (weaponGroups)(fetchDeployedMechChassisSocketWeaponGroup(i));
+            if (nonDefaultweaponGroup == PrimaryGroup) {
+                addressToSet = vars->baseAddresses.weapons[vars->primaryIndex];
+                vars->primaryIndex = i;
+            }
+            else if (nonDefaultweaponGroup == SecondaryGroup){
+                addressToSet = vars->baseAddresses.weapons[vars->secondaryIndex];
+                vars->secondaryIndex = i;
+            }
+            else {
+                MessageBoxA(NULL, "ERROR: Weapon with primary/secondary weapon group not already present in deployed struct", "ALIVE", MB_OK);
+                snprintf(buffer, 100, "weaponIndex = %d, searched for = %d", i, nonDefaultweaponGroup);
+                MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+            }
+        }
+        fetchDeployedWeaponAddress(i) = addressToSet;
+        fetchDeployedWeaponSocketStringAddress(i) = (uint64_t)fetchDeployedMechChassisSocketString(i);
+        fetchDeployedWeaponSocketID(i) = fetchDeployedMechChassisSocketID(i);
+        fetchDeployedWeaponSocketGroup(i) = fetchDeployedMechChassisSocketWeaponGroup(i);
+    }
+    vars->shouldResetResources = true;
 }
 
 bool ammoTypeHasBullet(unsigned char* ammoTypeAddress) {
@@ -375,7 +438,7 @@ void resetResources(varStruct* vars){
         vars->secondaryIndex = getWeaponIndexOfWeaponGroup(SecondaryGroup);
 
         //Stop updating when choose district state has been entered
-        if (currentState == FreelancerChooseDistrict)
+        if (currentState == FreelancerChooseDistrict || currentState == AfterLoadLevel)
             vars->shouldResetResources = false;
     }
     else if (shouldReset){
@@ -798,7 +861,9 @@ void handleChooseDistrictMenu(upgradeStruct* upgradeState, varStruct* vars) {
             memset((void*)chooseDistrictMenuStruct, 0x0, 2);
 
             if (vars->resourceUpdateNecessary) {
+                setNewMech(vars);
                 writeBytesToDeployedAsm(&updateGameToNewPlayerResources, 0x1, 0, 1);
+                vars->resourceUpdateNecessary = false;
             }
         } 
     }
@@ -824,7 +889,7 @@ DWORD WINAPI MainThread(LPVOID param) {
     varStruct variablesStruct{ deployedBaseAddresses, deployedOffsetsAndVals, -1, -1, false, false};
 
     //Repair is set to always show up
-    const buttons alwaysAvailableUpgradesButtons[] = { M_Repair }; //, Reload };
+    const buttons alwaysAvailableUpgradesButtons[] = { M_Repair, Reload };
 
     //Setup buffers for formatted strings to be shown by added buttons
     char formattedButtonStrings[addedButtons][maxButtonStringLength];
