@@ -13,6 +13,7 @@
 #include <random>
 #include <cmath>
 #include "utils.h"
+#include "mo.h"
 #include "BrigadorRogue.h"
 
 using namespace std;
@@ -49,16 +50,16 @@ const char* addedButtonStrings[] = {
     , {"S: Fire Rate +%.1fx $%lld k"}
     , {"S: Projectiles +%d Accuracy -%d $%lld k"}
     , {"S: Structure +%.1fx $%lld k"}
-    , {"%s  $%lld k"}
+    , {"%s  $%.01f m"}
 };
 #define addedButtons sizeof(addedButtonStrings) / sizeof(addedButtonStrings[0])
 
 //Cost relate to the button with the same index in addedButtonStrings
-const double baseButtonCosts[addedButtons]{
+double baseButtonCosts[addedButtons]{
     500000
     , 1000000
     , 1000000
-    , 0000000
+    , 1000000
     , 1000000
     , 1000000
     , 1000000
@@ -204,7 +205,7 @@ struct resourceLists {
 struct upgradeStruct {
     upgrades* availableUpgrades;
     char (*formattedButtonStrings)[maxButtonStringLength];
-    const double* upgradesCost;
+    double* upgradesCost;
     const uint64_t alwaysAvailableCount;
     const buttons* alwaysAvailableButtons;
     const uint64_t availableCount;
@@ -295,7 +296,7 @@ void freePatches(void) {
 //Sets up a list of all mech addresses
 //Code massaged from source function at +0xdbf10
 void setupMechList(upgradeStruct* upgradeState) {
-    //char buffer[256];
+    char buffer[256];
 
     LPVOID(*getMechAddress)(long long*, uint64_t) = getMechAddressFunction;
 
@@ -354,7 +355,6 @@ void setupMechList(upgradeStruct* upgradeState) {
                 //param_4 = local_160;
                 param_2 = local_140;
             } while (lVar12 < lVar16);
-
             upgradeState->resLists.mechAddressesLen = lVar12;
             //snprintf(buffer, 100, "mechCount = %d", lVar12);
             //MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
@@ -946,98 +946,99 @@ double getUpgradeCost(buttons buttonToHandle, upgradeStruct* upgradeState) {
 //Formats the strings in addedButtonStrings to be used when displaying buttons
 //Should be called after any on the variables used to format the strings are altered.
 void formatButtonStrings(upgradeStruct* upgradeState) {
+    char buffer[256];
     for (int i = 0; i < addedButtons; i++) {
-       switch ((buttons)i) {
-       case M_Repair:
-           snprintf(upgradeState->formattedButtonStrings[i], 
-               maxButtonStringLength, 
-               addedButtonStrings[i], 
-               repairHealthPoints, 
-               (long long)(getUpgradeCost((buttons)i, upgradeState)/1000));
-           break;
-       case M_PosOvercharge:
-           snprintf(upgradeState->formattedButtonStrings[i],
-               maxButtonStringLength,
-               addedButtonStrings[i],
-               overchargeMult,
-               (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
-           break;
-       case M_PosForwardSpeed:
-           snprintf(upgradeState->formattedButtonStrings[i],
-               maxButtonStringLength,
-               addedButtonStrings[i],
-               forwardSpeedMult,
-               (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
-           break;
-       case P_PosCapacity: // Primary: +Capacity
-           snprintf(upgradeState->formattedButtonStrings[i],
-               maxButtonStringLength,
-               addedButtonStrings[i],
-               pCapacityMult,
-               (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
-           break;
-       case P_PosFireRate: // Primary: +Fire Rate
-           snprintf(upgradeState->formattedButtonStrings[i],
-               maxButtonStringLength,
-               addedButtonStrings[i],
-               pFireRateMult,
-               (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
-           break;
-       case P_PosProjectilesNegAccuracy: // Primary: +Projectiles, -Accuracy
-           snprintf(upgradeState->formattedButtonStrings[i],
-               maxButtonStringLength,
-               addedButtonStrings[i],
-               pProjectiles,
-               pAccuracy,
-               (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
-           break;
-       case P_PosPropMult: // Primary: +Structure Damage
-           snprintf(upgradeState->formattedButtonStrings[i],
-               maxButtonStringLength,
-               addedButtonStrings[i],
-               pPropMult,
-               (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
-           break;
-       case S_PosCapacity: // Secondary: +Capacity
-           snprintf(upgradeState->formattedButtonStrings[i],
-               maxButtonStringLength,
-               addedButtonStrings[i],
-               sCapacityMult,
-               (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
-           break;
-       case S_PosFireRate: // Secondary: +Fire Rate
-           snprintf(upgradeState->formattedButtonStrings[i],
-               maxButtonStringLength,
-               addedButtonStrings[i],
-               sFireRateMult,
-               (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
-           break;
-       case S_PosProjectilesNegAccuracy: // Secondary: +Projectiles, -Accuracy
-           snprintf(upgradeState->formattedButtonStrings[i],
-               maxButtonStringLength,
-               addedButtonStrings[i],
-               sProjectiles,
-               sAccuracy,
-               (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
-           break;
-       case S_PosPropMult: // Secondary: +Structure Damage
-           snprintf(upgradeState->formattedButtonStrings[i],
-               maxButtonStringLength,
-               addedButtonStrings[i],
-               sPropMult,
-               (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
-           break;
-       case RandomMech: // Save+Load test
-           snprintf(upgradeState->formattedButtonStrings[i],
-               maxButtonStringLength,
-               addedButtonStrings[i],
-               (char*)(upgradeState->randomizedParts.mechAddress + 0x1188),
-               (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
-           break;
-       default:
-           MessageBoxA(NULL, "Error: Undefined button tried to be formatted. ", "ALIVE", MB_OK);
-           return;
-       }
+        switch ((buttons)i) {
+        case M_Repair:
+            snprintf(upgradeState->formattedButtonStrings[i], 
+                maxButtonStringLength, 
+                addedButtonStrings[i], 
+                repairHealthPoints, 
+                (long long)(getUpgradeCost((buttons)i, upgradeState)/1000));
+            break;
+        case M_PosOvercharge:
+            snprintf(upgradeState->formattedButtonStrings[i],
+                maxButtonStringLength,
+                addedButtonStrings[i],
+                overchargeMult,
+                (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
+            break;
+        case M_PosForwardSpeed:
+            snprintf(upgradeState->formattedButtonStrings[i],
+                maxButtonStringLength,
+                addedButtonStrings[i],
+                forwardSpeedMult,
+                (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
+            break;
+        case P_PosCapacity: // Primary: +Capacity
+            snprintf(upgradeState->formattedButtonStrings[i],
+                maxButtonStringLength,
+                addedButtonStrings[i],
+                pCapacityMult,
+                (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
+            break;
+        case P_PosFireRate: // Primary: +Fire Rate
+            snprintf(upgradeState->formattedButtonStrings[i],
+                maxButtonStringLength,
+                addedButtonStrings[i],
+                pFireRateMult,
+                (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
+            break;
+        case P_PosProjectilesNegAccuracy: // Primary: +Projectiles, -Accuracy
+            snprintf(upgradeState->formattedButtonStrings[i],
+                maxButtonStringLength,
+                addedButtonStrings[i],
+                pProjectiles,
+                pAccuracy,
+                (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
+            break;
+        case P_PosPropMult: // Primary: +Structure Damage
+            snprintf(upgradeState->formattedButtonStrings[i],
+                maxButtonStringLength,
+                addedButtonStrings[i],
+                pPropMult,
+                (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
+            break;
+        case S_PosCapacity: // Secondary: +Capacity
+            snprintf(upgradeState->formattedButtonStrings[i],
+                maxButtonStringLength,
+                addedButtonStrings[i],
+                sCapacityMult,
+                (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
+            break;
+        case S_PosFireRate: // Secondary: +Fire Rate
+            snprintf(upgradeState->formattedButtonStrings[i],
+                maxButtonStringLength,
+                addedButtonStrings[i],
+                sFireRateMult,
+                (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
+            break;
+        case S_PosProjectilesNegAccuracy: // Secondary: +Projectiles, -Accuracy
+            snprintf(upgradeState->formattedButtonStrings[i],
+                maxButtonStringLength,
+                addedButtonStrings[i],
+                sProjectiles,
+                sAccuracy,
+                (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
+            break;
+        case S_PosPropMult: // Secondary: +Structure Damage
+            snprintf(upgradeState->formattedButtonStrings[i],
+                maxButtonStringLength,
+                addedButtonStrings[i],
+                sPropMult,
+                (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
+            break;
+        case RandomMech: // Random Mech purchase
+            snprintf(upgradeState->formattedButtonStrings[i],
+                maxButtonStringLength,
+                addedButtonStrings[i],
+                text_lookup((char*)(upgradeState->randomizedParts.mechAddress + mechNameOffset)),
+                (float)(getUpgradeCost((buttons)i, upgradeState) / (double)1000000));
+            break;
+        default:
+            MessageBoxA(NULL, "Error: Undefined button tried to be formatted. ", "ALIVE", MB_OK);
+            return;
+        }
     }
 }
 
@@ -1090,6 +1091,8 @@ void setupUpgradeList(upgradeStruct* upgradeState, rngStruct* rng) {
 
         //Set new randomized resources (mech and weapons)
         setRandomMechAddress(upgradeState, rng);
+        upgradeState->upgradesCost[RandomMech] = *(double*)(upgradeState->randomizedParts.mechAddress + mechCostOffset);
+
 
         //Reset state
         upgradeState->randomizeUpgrades = false;
@@ -1236,7 +1239,6 @@ bool shouldExit = false;
 
 DWORD WINAPI MainThread(LPVOID param) {
     char buffer[256];
-
     uint64_t weaponBaseAddresses[maxWeapons] = { 0 };
     uint64_t bulletBaseAddresses[maxWeapons] = { 0 };
 
@@ -1253,7 +1255,7 @@ DWORD WINAPI MainThread(LPVOID param) {
     varStruct variablesStruct{ deployedBaseAddresses, deployedOffsetsAndVals, -1, -1, false, false};
 
     //Repair is set to always show up
-    const buttons alwaysAvailableUpgradesButtons[] = { M_Repair, RandomMech , P_PosCapacity};
+    const buttons alwaysAvailableUpgradesButtons[] = { RandomMech };
 
     //Setup buffers for formatted strings to be shown by added buttons
     char formattedButtonStrings[addedButtons][maxButtonStringLength];
@@ -1271,7 +1273,7 @@ DWORD WINAPI MainThread(LPVOID param) {
         sizeof(alwaysAvailableUpgradesButtons) / sizeof(alwaysAvailableUpgradesButtons[0]),
         alwaysAvailableUpgradesButtons,
         4,
-        1,
+        0,
         5,
         0,
         0,

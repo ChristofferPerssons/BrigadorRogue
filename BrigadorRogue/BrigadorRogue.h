@@ -177,4 +177,6 @@ const enum freelancerMenuStates {
 //This value is arbitrary and can be changed. It sets the minimum size and expansion rate for arrays containing resource addresses
 #define arbitraryResourceCount 1024
 
+#define mechCostOffset 0x1208
 
+#define mechNameOffset 0x1188
