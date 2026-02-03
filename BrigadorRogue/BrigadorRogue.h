@@ -130,6 +130,24 @@ const enum freelancerMenuStates {
 
 #define maxWeapons 9
 
+#define fetchDeployedMechLegsSocketAmount *(uint32_t*)(fetchDeployedMechLegsAddress + 0x8)
+
+#define fetchDeployedMechLegsSocketID(y) *(uint32_t*)(fetchDeployedMechLegsAddress + 0x34 + (y)*0x34)
+
+#define fetchDeployedMechLegsSocketString(y) (char*)(fetchDeployedMechLegsAddress + 0x14 + (y)*0x34)
+
+#define fetchDeployedMechLegsSocketWeaponGroup(y) *(uint32_t*)(fetchDeployedMechLegsAddress + 0x34 + (y)*0x34 + 0x4)
+
+#define fetchDeployedMechHullAddress *(uint64_t*)(fetchDeployedMechAddress + 0x88)
+
+#define fetchDeployedMechHullSocketAmount *(uint32_t*)(fetchDeployedMechHullAddress + 0x8)
+
+#define fetchDeployedMechHullSocketID(y) *(uint32_t*)(fetchDeployedMechHullAddress + 0x34 + (y)*0x34)
+
+#define fetchDeployedMechHullSocketString(y) (char*)(fetchDeployedMechHullAddress + 0x14 + (y)*0x34)
+
+#define fetchDeployedMechHullSocketWeaponGroup(y) *(uint32_t*)(fetchDeployedMechHullAddress + 0x34 + (y)*0x34 + 0x4)
+
 #define fetchDeployedMechChassisAddress *(uint64_t*)(fetchDeployedMechAddress + 0x90)
 
 #define fetchDeployedMechChassisSocketAmount *(uint32_t*)(fetchDeployedMechChassisAddress + 0x8)
@@ -151,5 +169,12 @@ const enum freelancerMenuStates {
 #define fetchDeployedMechDefaultSocketID(y) *(uint32_t*)(fetchDeployedMechAddress + 0xb8 + (y)*0x70 + 0x68)
 
 #define fetchDeployedWeaponCount *(uint32_t*)(*(uint64_t*)keyAddress + 0x2d10)
+
+#define fetchMechDictAddress *(uint64_t**)(baseModule+0x224CB8)
+#define stringKeyComparisonFunction (_CoreCrtNonSecureSearchSortCompareFunction)(baseModule + 0xdda40)
+#define getMechAddressFunction (LPVOID(*)(long long*, uint64_t))(baseModule + 0xe0f20)
+
+//This value is arbitrary and can be changed. It sets the minimum size and expansion rate for arrays containing resource addresses
+#define arbitraryResourceCount 1024
 
 

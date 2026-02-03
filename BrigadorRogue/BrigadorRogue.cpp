@@ -33,7 +33,7 @@ const enum buttons {
     , S_PosFireRate
     , S_PosProjectilesNegAccuracy
     , S_PosPropMult
-    , Reload
+    , RandomMech
 };
 
 //Must correspond to buttons enum
@@ -49,7 +49,7 @@ const char* addedButtonStrings[] = {
     , {"S: Fire Rate +%.1fx $%lld k"}
     , {"S: Projectiles +%d Accuracy -%d $%lld k"}
     , {"S: Structure +%.1fx $%lld k"}
-    , {"Reload"}
+    , {"%s  $%lld k"}
 };
 #define addedButtons sizeof(addedButtonStrings) / sizeof(addedButtonStrings[0])
 
@@ -58,7 +58,7 @@ const double baseButtonCosts[addedButtons]{
     500000
     , 1000000
     , 1000000
-    , 1000000
+    , 0000000
     , 1000000
     , 1000000
     , 1000000
@@ -184,6 +184,23 @@ struct upgrades {
     buttons buttonIndex[maxAvailableUpgrades];
 };
 
+//Used for holding randomized parts
+struct randMechParts {
+    uint64_t mechAddress;
+    uint64_t primaryAddress;
+    uint64_t secondaryAddress;
+    uint64_t hornAddress;
+};
+
+struct resourceLists {
+    uint64_t* mechAddresses;
+    uint64_t mechAddressesLen;
+    uint64_t mechAddressesMaxLen;
+    uint64_t* weaponAddresses;
+    uint64_t weaponAddressesLen;
+    uint64_t weaponAddressesMaxLen;
+};
+
 struct upgradeStruct {
     upgrades* availableUpgrades;
     char (*formattedButtonStrings)[maxButtonStringLength];
@@ -198,6 +215,8 @@ struct upgradeStruct {
     bool randomizeUpgrades;
     float repairAmount;
     float maxHealth;
+    randMechParts randomizedParts;
+    resourceLists resLists;
 };
 
 struct rngStruct {
@@ -273,13 +292,92 @@ void freePatches(void) {
     VirtualFree((LPVOID)updateGameToNewPlayerResources.hookTarget, 0, MEM_RELEASE);
 }
 
+//Sets up a list of all mech addresses
+//Code massaged from source function at +0xdbf10
+void setupMechList(upgradeStruct* upgradeState) {
+    //char buffer[256];
+
+    LPVOID(*getMechAddress)(long long*, uint64_t) = getMechAddressFunction;
+
+    char local_128[64] = { 0 };
+
+    uint64_t* param_2 = fetchMechDictAddress;
+    uint64_t param4content = 0xE;
+    uint64_t lVar16;
+    uint64_t lVar12;
+    uint64_t* plVar8;
+    uint64_t* local_140 = param_2;
+    char* stringKey;
+    uint64_t dictIndex;
+    uint64_t mechAddress;
+
+    lVar16 = param4content;
+    if (local_128[lVar16] == '\0') {
+        local_128[lVar16] = '\x01';
+        lVar12 = 0;
+        plVar8 = param_2 + (lVar16 + 4) * 2;
+        lVar16 = *plVar8;
+        param_2 = local_140;
+        if (0 < lVar16) {
+            do {
+                stringKey = *(char**)(*(uint64_t*)(*local_140 + 0x18) + (uint64_t)*(int*)(plVar8[1] + lVar12 * 4) * 8);
+                //snprintf(buffer, 100, "mech resource string key address = %I64x, count = %d", stringKey, lVar16);
+                //MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+
+                uint64_t stringMatchAddress = (uint64_t)bsearch(&stringKey, *(void**)(*param_2 + 0x18), (uint64_t) * (int*)(*param_2 + 0x10), 8, stringKeyComparisonFunction);
+
+                dictIndex = ((uint64_t)stringMatchAddress - *(uint64_t*)(*param_2 + 0x18) >> 3);
+                //snprintf(buffer, 100, "offset = %I64x", dictIndex);
+                //MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+
+                mechAddress = (uint64_t)getMechAddress((long long*)param_2, *(uint64_t*)(*(uint64_t*)(*param_2 + 0x28) + dictIndex * 0x8));
+                
+                //snprintf(buffer, 100, "mechAddress = %I64x", mechAddress);
+                //MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+
+                //Increase size of list if necessary 
+                if (lVar12 >= upgradeState->resLists.mechAddressesMaxLen) {
+                    uint64_t* newListAddress = new uint64_t[upgradeState->resLists.mechAddressesMaxLen + arbitraryResourceCount];
+                    
+                    memcpy(newListAddress, upgradeState->resLists.mechAddresses, upgradeState->resLists.mechAddressesMaxLen * sizeof(uint64_t));
+                    
+                    delete upgradeState->resLists.mechAddresses;
+                    upgradeState->resLists.mechAddressesMaxLen += arbitraryResourceCount;
+                    upgradeState->resLists.mechAddresses = newListAddress;
+                }
+
+                //Append resource to list
+                upgradeState->resLists.mechAddresses[lVar12] = mechAddress;
+
+                //Incremet counter
+                lVar12 = lVar12 + 1;
+                //param_4 = local_160;
+                param_2 = local_140;
+            } while (lVar12 < lVar16);
+
+            upgradeState->resLists.mechAddressesLen = lVar12;
+            //snprintf(buffer, 100, "mechCount = %d", lVar12);
+            //MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+        }
+    }
+}
+
+void setRandomMechAddress(upgradeStruct* upgradeState, rngStruct* rng) {
+    char buffer[256];
+    std::uniform_int_distribution<> mechDistrib(0, upgradeState->resLists.mechAddressesLen - 1);
+    int randomIndex = mechDistrib(rng->gen);
+    upgradeState->randomizedParts.mechAddress = upgradeState->resLists.mechAddresses[randomIndex];
+    //snprintf(buffer, 100, "mechAddress = %I64x", upgradeState->randomizedParts.mechAddress);
+    //MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+}
+
 //Return index to first weapon with the searched for weaponGroup
 int getWeaponIndexOfWeaponGroup(weaponGroups weaponGroup) {
     char buffer[256];
     for (int i = 0; i < maxWeapons; i++) {
         weaponGroups curWeaponGroup = (weaponGroups)fetchDeployedWeaponSocketGroup(i);
-        snprintf(buffer, 100, "weaponGroup = %d, searched for = %d", curWeaponGroup, weaponGroup);
-        MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+        //snprintf(buffer, 100, "weaponGroup = %d, searched for = %d", curWeaponGroup, weaponGroup);
+        //MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
         if (weaponGroup == curWeaponGroup) {
             return i;
         }
@@ -287,67 +385,10 @@ int getWeaponIndexOfWeaponGroup(weaponGroups weaponGroup) {
     return -1;
 }
 
-//Updates the memory of the deployed struct to a mew mech and reset weapons to use its assigned default weapons
-//Must be called before trying to save and reload the mech to get valid values after changing the deployed mech
-void setNewMech(varStruct* vars){ //, uint64_t newMechAddress) {
-    char buffer[256];
-
-    //Reset weapon slots
-    for (int i = 0; i < maxWeapons; i++) {
-        fetchDeployedWeaponAddress(i) = 0;
-        fetchDeployedWeaponSocketStringAddress(i) = 0;
-        fetchDeployedWeaponSocketID(i) = 0;
-        fetchDeployedWeaponSocketGroup(i) = 0xFFFFFFFF;
-    }
-    MessageBoxA(NULL, "DeployedWeaponsShouldHaveReset", "ALIVE", MB_OK);
-
-    uint64_t defaultSocketsToHandle = fetchDeployedMechDefaultSocketAmount;
-    uint64_t socketsToHandle = fetchDeployedMechChassisSocketAmount;
-
-    //Set amount of deployed weapons to number of sockets on chassis. 
-    fetchDeployedWeaponCount = socketsToHandle;
-
-    //Set weapons
-    for (uint64_t i = 0; i < socketsToHandle; i++) {
-        uint64_t addressToSet = 0;
-        //Search for a default weapon matching the current socket
-        bool defaultMatchHandled = false;
-        //Only use default for non-primary/secondary weapons. Eg, primary and secondary are persistent across mechs
-        if (fetchDeployedMechChassisSocketWeaponGroup(i) != PrimaryGroup && fetchDeployedMechChassisSocketWeaponGroup(i) != SecondaryGroup) {
-            for (int k = 0; k < defaultSocketsToHandle; k++) {
-                if (strcmp((char*)fetchDeployedMechChassisSocketString(i), (char*)fetchDeployedMechDefaultSocketString(k)) == 0) {
-                    addressToSet = (fetchDeployedMechDefaultSocketWeaponList(k))[0];
-                    defaultMatchHandled = true;
-                }
-            }
-        }
-
-        //Handle if default weapon was not set by using previos deployed weapon with the correct weapon group
-        if (!defaultMatchHandled) {
-            int nonDefaultweaponGroup = (weaponGroups)(fetchDeployedMechChassisSocketWeaponGroup(i));
-            if (nonDefaultweaponGroup == PrimaryGroup) {
-                addressToSet = vars->baseAddresses.weapons[vars->primaryIndex];
-                vars->primaryIndex = i;
-            }
-            else if (nonDefaultweaponGroup == SecondaryGroup){
-                addressToSet = vars->baseAddresses.weapons[vars->secondaryIndex];
-                vars->secondaryIndex = i;
-            }
-            else {
-                MessageBoxA(NULL, "ERROR: Weapon with primary/secondary weapon group not already present in deployed struct", "ALIVE", MB_OK);
-                snprintf(buffer, 100, "weaponIndex = %d, searched for = %d", i, nonDefaultweaponGroup);
-                MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
-            }
-        }
-        fetchDeployedWeaponAddress(i) = addressToSet;
-        fetchDeployedWeaponSocketStringAddress(i) = (uint64_t)fetchDeployedMechChassisSocketString(i);
-        fetchDeployedWeaponSocketID(i) = fetchDeployedMechChassisSocketID(i);
-        fetchDeployedWeaponSocketGroup(i) = fetchDeployedMechChassisSocketWeaponGroup(i);
-    }
-    vars->shouldResetResources = true;
-}
-
 bool ammoTypeHasBullet(unsigned char* ammoTypeAddress) {
+    if (ammoTypeAddress == NULL) {
+        return false;
+    }
     ammoTypes ammoType = (ammoTypes)*ammoTypeAddress;
     if (ammoType == Bullet || ammoType == Artillery || ammoType == Cannon) {
         return true;
@@ -363,14 +404,42 @@ void updateVars(uint64_t baseAddress, uthruple* offsetsNVals, uint64_t varCount)
 
 //Copies stored weapon var values to game memory
 void updateResources(varStruct* vars) {
+    char buffer[256];
     updateVars(vars->baseAddresses.mech, vars->offsetsNVals.mech, mechVars);
+    //if (vars->resourceUpdateNecessary) {
+    //
+    //    MessageBoxA(NULL, "updateResources1", "ALIVE", MB_OK);
+    //}
     updateVars(vars->baseAddresses.mechLegs, vars->offsetsNVals.mechLegs, mechLegsVars);
+    //if (vars->resourceUpdateNecessary) {
+    //
+    //    MessageBoxA(NULL, "updateResources2", "ALIVE", MB_OK);
+    //}
     for (int i = 0; i < maxWeapons; i++) {
         if (vars->baseAddresses.weapons[i] != NULL) {
+            //if (vars->resourceUpdateNecessary) {
+            //
+            //    snprintf(buffer, 100, "updateResources3 %d", i);
+            //    MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+            //}
             updateVars(vars->baseAddresses.weapons[i], vars->offsetsNVals.weapons[i], weaponVars);
+            //if (vars->resourceUpdateNecessary) {
+            //    snprintf(buffer, 100, "updateResources3.5 %d", i);
+            //    MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+            //}
             if (ammoTypeHasBullet(fetchDeployedWeaponAmmoTypeAddress(i))) {
+                //if (vars->resourceUpdateNecessary) {
+                //    snprintf(buffer, 100, "updateResources3.9 %d", i);
+                //    MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+                //}
                 updateVars(vars->baseAddresses.bullets[i], vars->offsetsNVals.bullets[i], bulletVars);
             }
+            //if (vars->resourceUpdateNecessary) {
+            //
+            //    snprintf(buffer, 100, "updateResources4 %d", i);
+            //    MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+            //}
+            
         }
     }
 }
@@ -444,6 +513,279 @@ void resetResources(varStruct* vars){
     else if (shouldReset){
         vars->shouldResetResources = true;
     } 
+}
+
+//Updates the memory of the deployed struct to a new mech and reset weapons to use its assigned default weapons
+//Must be called before trying to save and reload the mech to get valid values after changing the deployed mech
+void setNewMech(varStruct* vars, uint64_t newMechAddress) {
+    char buffer[256];
+    //Set new deployed mech
+    fetchDeployedMechAddress = newMechAddress;
+
+    //Get a stable copy of primary and secondary weapon data 
+    uint64_t primaryAddress = vars->baseAddresses.weapons[vars->primaryIndex];
+    uint64_t primaryBulletAddress = vars->baseAddresses.bullets[vars->primaryIndex];
+    uint64_t secondaryAddress = vars->baseAddresses.weapons[vars->secondaryIndex];
+    uint64_t secondaryBulletAddress = vars->baseAddresses.bullets[vars->secondaryIndex];
+
+    uthruple primaryOffsetsNVals[weaponVars];
+    for (int k = 0; k < weaponVars; k++) {
+        primaryOffsetsNVals[k].offset = vars->offsetsNVals.weapons[vars->primaryIndex][k].offset;
+        primaryOffsetsNVals[k].org = vars->offsetsNVals.weapons[vars->primaryIndex][k].org;
+        primaryOffsetsNVals[k].val = vars->offsetsNVals.weapons[vars->primaryIndex][k].val;
+    }
+    uthruple secondaryOffsetsNVals[weaponVars];
+    for (int k = 0; k < weaponVars; k++) {
+        secondaryOffsetsNVals[k].offset = vars->offsetsNVals.weapons[vars->secondaryIndex][k].offset;
+        secondaryOffsetsNVals[k].org = vars->offsetsNVals.weapons[vars->secondaryIndex][k].org;
+        secondaryOffsetsNVals[k].val = vars->offsetsNVals.weapons[vars->secondaryIndex][k].val;
+    }
+    uthruple primaryBulletOffsetsNVals[bulletVars];
+    for (int k = 0; k < bulletVars; k++) {
+        primaryBulletOffsetsNVals[k].offset = vars->offsetsNVals.bullets[vars->primaryIndex][k].offset;
+        primaryBulletOffsetsNVals[k].org = vars->offsetsNVals.bullets[vars->primaryIndex][k].org;
+        primaryBulletOffsetsNVals[k].val = vars->offsetsNVals.bullets[vars->primaryIndex][k].val;
+    }
+    uthruple secondaryBulletOffsetsNVals[bulletVars];
+    for (int k = 0; k < bulletVars; k++) {
+        secondaryBulletOffsetsNVals[k].offset = vars->offsetsNVals.bullets[vars->secondaryIndex][k].offset;
+        secondaryBulletOffsetsNVals[k].org = vars->offsetsNVals.bullets[vars->secondaryIndex][k].org;
+        secondaryBulletOffsetsNVals[k].val = vars->offsetsNVals.bullets[vars->secondaryIndex][k].val;
+    }
+
+
+    //Reset weapon slots
+    for (int i = 0; i < maxWeapons; i++) {
+        fetchDeployedWeaponAddress(i) = 0;
+        fetchDeployedWeaponSocketStringAddress(i) = 0;
+        fetchDeployedWeaponSocketID(i) = 0;
+        fetchDeployedWeaponSocketGroup(i) = 0xFFFFFFFF;
+    }
+
+    //MessageBoxA(NULL, "1", "ALIVE", MB_OK);
+
+    uint64_t defaultSocketsToHandle = fetchDeployedMechDefaultSocketAmount;
+    //MessageBoxA(NULL, "1.1", "ALIVE", MB_OK);
+
+
+    uint64_t socketsToHandle = 0;
+    uint64_t chassisSockets = 0;
+    uint64_t legsSockets = 0;
+    uint64_t hullSockets = 0;
+    if (fetchDeployedMechChassisAddress) {
+        //MessageBoxA(NULL, "Chassis", "ALIVE", MB_OK);
+        chassisSockets = fetchDeployedMechChassisSocketAmount;
+        socketsToHandle += chassisSockets;
+    }
+    if (fetchDeployedMechLegsAddress) {
+        //MessageBoxA(NULL, "Legs", "ALIVE", MB_OK);
+        legsSockets = fetchDeployedMechLegsSocketAmount;
+        socketsToHandle += legsSockets;
+    }
+    if (fetchDeployedMechHullAddress) {
+        //MessageBoxA(NULL, "Hull", "ALIVE", MB_OK);
+        hullSockets = fetchDeployedMechHullSocketAmount;
+        socketsToHandle += hullSockets;
+    }
+
+    //Set chassis weapons
+    uint64_t skippedChassisSockets = 0;
+    for (uint64_t i = 0; i + skippedChassisSockets < chassisSockets; i++) {
+        uint64_t virtuali = i + skippedChassisSockets;
+        if (strcmp((char*)fetchDeployedMechChassisSocketString(virtuali), "upper") == 0 || strcmp((char*)fetchDeployedMechChassisSocketString(virtuali), "lower") == 0 || strcmp((char*)fetchDeployedMechChassisSocketString(virtuali), "hull") == 0) {
+            skippedChassisSockets += 1;
+            i--;
+            continue;
+        }
+        uint64_t addressToSet = 0;
+        //Search for a default weapon matching the current socket
+        bool defaultMatchHandled = false;
+        //Only use default for non-primary/secondary weapons. Eg, primary and secondary are persistent across mechs
+        for (int k = 0; k < defaultSocketsToHandle; k++) {
+            if (strcmp((char*)fetchDeployedMechChassisSocketString(virtuali), (char*)fetchDeployedMechDefaultSocketString(k)) == 0) {
+                if ((fetchDeployedMechDefaultSocketWeaponList(k))[0]) {
+                    addressToSet = (fetchDeployedMechDefaultSocketWeaponList(k))[0];
+                    defaultMatchHandled = true;
+                }
+            }
+        }
+
+        //Handle if default weapon was not set by using previous deployed weapon with the correct weapon group
+        if (!defaultMatchHandled) {
+            weaponGroups nonDefaultweaponGroup = (weaponGroups)(fetchDeployedMechChassisSocketWeaponGroup(virtuali));
+            if (nonDefaultweaponGroup == PrimaryGroup) {
+                addressToSet = primaryAddress;
+            }
+            else if (nonDefaultweaponGroup == SecondaryGroup) {
+                addressToSet = secondaryAddress;
+            }
+            else {
+                //MessageBoxA(NULL, "Warning: Chassis weapon with default weapon group not already present in deployed struct. Using arbitrary weapon (secondary)", "ALIVE", MB_OK);
+                //snprintf(buffer, 100, "weaponIndex = %d, searched for = %d", i, nonDefaultweaponGroup);
+                //MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+                int weaponIndex = getWeaponIndexOfWeaponGroup(nonDefaultweaponGroup);
+                if (weaponIndex != -1) {
+                    addressToSet = secondaryAddress;
+                }
+                else {
+                    addressToSet = secondaryAddress;
+                }
+            }
+        }
+        fetchDeployedWeaponAddress(i) = addressToSet;
+        fetchDeployedWeaponSocketStringAddress(i) = (uint64_t)fetchDeployedMechChassisSocketString(virtuali);
+        fetchDeployedWeaponSocketID(i) = fetchDeployedMechChassisSocketID(virtuali);
+        fetchDeployedWeaponSocketGroup(i) = fetchDeployedMechChassisSocketWeaponGroup(virtuali);
+    }
+
+    //Set legs weapons
+    uint64_t skippedLegSockets = 0;
+    for (uint64_t i = 0; i + skippedLegSockets < legsSockets; i++) {
+        uint64_t virtuali = i + skippedLegSockets;
+        if (strcmp((char*)fetchDeployedMechLegsSocketString(virtuali), "upper") == 0 || strcmp((char*)fetchDeployedMechLegsSocketString(virtuali), "lower") == 0 || strcmp((char*)fetchDeployedMechLegsSocketString(virtuali), "hull") == 0) {
+            skippedLegSockets += 1;
+            i--;
+            continue;
+        }
+        uint64_t addressToSet = 0;
+        //Search for a default weapon matching the current socket
+        bool defaultMatchHandled = false;
+        //Only use default for non-primary/secondary weapons. Eg, primary and secondary are persistent across mechs
+        for (int k = 0; k < defaultSocketsToHandle; k++) {
+            if (strcmp((char*)fetchDeployedMechLegsSocketString(virtuali), (char*)fetchDeployedMechDefaultSocketString(k)) == 0) {
+                if ((fetchDeployedMechDefaultSocketWeaponList(k))[0]) {
+                    addressToSet = (fetchDeployedMechDefaultSocketWeaponList(k))[0];
+                    defaultMatchHandled = true;
+                }
+            }
+        }
+
+        //Handle if default weapon was not set by using previous deployed weapon with the correct weapon group
+        if (!defaultMatchHandled) {
+            weaponGroups nonDefaultweaponGroup = (weaponGroups)(fetchDeployedMechLegsSocketWeaponGroup(virtuali));
+            if (nonDefaultweaponGroup == PrimaryGroup) {
+                addressToSet = primaryAddress;
+            }
+            else if (nonDefaultweaponGroup == SecondaryGroup) {
+                addressToSet = secondaryAddress;
+            }
+            else {
+                //MessageBoxA(NULL, "ERROR: Legs weapon with primary/secondary or default weapon group not already present in deployed struct. Using arbitrary weapon (secondary)", "ALIVE", MB_OK);
+                //snprintf(buffer, 100, "weaponIndex = %d, searched for = %d", i, nonDefaultweaponGroup);
+                //MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+                int weaponIndex = getWeaponIndexOfWeaponGroup(nonDefaultweaponGroup);
+                if (weaponIndex != -1) {
+                    addressToSet = secondaryAddress;
+                }
+                else {
+                    addressToSet = secondaryAddress;
+                }
+
+            }
+        }
+        fetchDeployedWeaponAddress((i + chassisSockets)) = addressToSet;
+        fetchDeployedWeaponSocketStringAddress((i + chassisSockets)) = (uint64_t)fetchDeployedMechLegsSocketString(virtuali);
+        fetchDeployedWeaponSocketID((i + chassisSockets)) = fetchDeployedMechLegsSocketID(virtuali);
+        fetchDeployedWeaponSocketGroup((i + chassisSockets)) = fetchDeployedMechLegsSocketWeaponGroup(virtuali);
+    }
+
+    //Set hull weapons
+    uint64_t skippedHullSockets = 0;
+    for (uint64_t i = 0; i + skippedHullSockets < hullSockets; i++) {
+        uint64_t virtuali = i + skippedHullSockets;
+        if (strcmp((char*)fetchDeployedMechHullSocketString(virtuali), "upper") == 0 || strcmp((char*)fetchDeployedMechHullSocketString(virtuali), "lower") == 0 || strcmp((char*)fetchDeployedMechHullSocketString(virtuali), "hull") == 0) {
+            skippedHullSockets += 1;
+            i--;
+            continue;
+        }
+        uint64_t addressToSet = 0;
+
+        //Search for a default weapon matching the current socket
+        bool defaultMatchHandled = false;
+        //Only use default for non-primary/secondary weapons. Eg, primary and secondary are persistent across mechs
+        for (int k = 0; k < defaultSocketsToHandle; k++) {
+            if (strcmp((char*)fetchDeployedMechHullSocketString(virtuali), (char*)fetchDeployedMechDefaultSocketString(k)) == 0) {
+                if ((fetchDeployedMechDefaultSocketWeaponList(k))[0]) {
+                    addressToSet = (fetchDeployedMechDefaultSocketWeaponList(k))[0];
+                    defaultMatchHandled = true;
+                }
+            }
+        }
+
+        //Handle if default weapon was not set by using previous deployed weapon with the correct weapon group
+        if (!defaultMatchHandled) {
+            weaponGroups nonDefaultweaponGroup = (weaponGroups)(fetchDeployedMechHullSocketWeaponGroup(virtuali));
+            if (nonDefaultweaponGroup == PrimaryGroup) {
+                addressToSet = primaryAddress;
+            }
+            else if (nonDefaultweaponGroup == SecondaryGroup) {
+                addressToSet = secondaryAddress;
+            }
+            else {
+                //MessageBoxA(NULL, "ERROR: Hull weapon with primary/secondary or default weapon group not already present in deployed struct. Using arbitrary weapon (secondary)", "ALIVE", MB_OK);
+                //snprintf(buffer, 100, "weaponIndex = %d, searched for = %d", i, nonDefaultweaponGroup);
+                //MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+                int weaponIndex = getWeaponIndexOfWeaponGroup(nonDefaultweaponGroup);
+                if (weaponIndex != -1) {
+                    addressToSet = secondaryAddress;
+                }
+                else {
+                    addressToSet = secondaryAddress;
+                }
+
+            }
+        }
+        fetchDeployedWeaponAddress((i + chassisSockets + legsSockets)) = addressToSet;
+        fetchDeployedWeaponSocketStringAddress((i + chassisSockets + legsSockets)) = (uint64_t)fetchDeployedMechHullSocketString(virtuali);
+        fetchDeployedWeaponSocketID((i + chassisSockets + legsSockets)) = fetchDeployedMechHullSocketID(virtuali);
+        fetchDeployedWeaponSocketGroup((i + chassisSockets + legsSockets)) = fetchDeployedMechHullSocketWeaponGroup(virtuali);
+    }
+
+    //Set amount of deployed weapons to number of sockets on chassis + legs discounting mech parts. 
+    fetchDeployedWeaponCount = socketsToHandle - skippedChassisSockets - skippedLegSockets - skippedHullSockets;
+
+    //Update index
+    vars->primaryIndex = getWeaponIndexOfWeaponGroup(PrimaryGroup);
+    vars->secondaryIndex = getWeaponIndexOfWeaponGroup(SecondaryGroup);
+
+    //Set primary and secondary to original
+    fetchDeployedWeaponAddress(vars->primaryIndex) = primaryAddress;
+    fetchDeployedWeaponAddress(vars->secondaryIndex) = secondaryAddress;
+
+    //Reset weapon state
+    vars->shouldResetResources = true;
+    resetResources(vars);
+
+    //snprintf(buffer, 100, "PrimaryIdx = %d, SecondaryIdx = %d", vars->primaryIndex, vars->secondaryIndex);
+    //MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+
+    //Update primary and secondary vars to original values
+    for (int i = 0; i < maxWeapons; i++) {
+        if (vars->baseAddresses.weapons[i] == primaryAddress) {
+            for (int k = 0; k < weaponVars; k++) {
+                vars->offsetsNVals.weapons[i][k].offset = primaryOffsetsNVals[k].offset;
+                vars->offsetsNVals.weapons[i][k].org = primaryOffsetsNVals[k].org;
+                vars->offsetsNVals.weapons[i][k].val = primaryOffsetsNVals[k].val;
+            }
+            for (int k = 0; k < bulletVars; k++) {
+                vars->offsetsNVals.bullets[i][k].offset = primaryBulletOffsetsNVals[k].offset;
+                vars->offsetsNVals.bullets[i][k].org = primaryBulletOffsetsNVals[k].org;
+                vars->offsetsNVals.bullets[i][k].val = primaryBulletOffsetsNVals[k].val;
+            }
+        }
+        else if (vars->baseAddresses.weapons[i] == secondaryAddress || i == vars->secondaryIndex) {
+            for (int k = 0; k < weaponVars; k++) {
+               vars->offsetsNVals.weapons[i][k].offset = secondaryOffsetsNVals[k].offset;
+               vars->offsetsNVals.weapons[i][k].org = secondaryOffsetsNVals[k].org;
+               vars->offsetsNVals.weapons[i][k].val = secondaryOffsetsNVals[k].val;
+            }
+            for (int k = 0; k < bulletVars; k++) {
+                vars->offsetsNVals.bullets[i][k].offset = secondaryBulletOffsetsNVals[k].offset;
+                vars->offsetsNVals.bullets[i][k].org = secondaryBulletOffsetsNVals[k].org;
+                vars->offsetsNVals.bullets[i][k].val = secondaryBulletOffsetsNVals[k].val;
+            }
+        }
+    }
 }
 
 double getMoney() {
@@ -685,10 +1027,12 @@ void formatButtonStrings(upgradeStruct* upgradeState) {
                sPropMult,
                (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
            break;
-       case Reload: // Save+Load test
+       case RandomMech: // Save+Load test
            snprintf(upgradeState->formattedButtonStrings[i],
                maxButtonStringLength,
-               addedButtonStrings[i]);
+               addedButtonStrings[i],
+               (char*)(upgradeState->randomizedParts.mechAddress + 0x1188),
+               (long long)(getUpgradeCost((buttons)i, upgradeState) / 1000));
            break;
        default:
            MessageBoxA(NULL, "Error: Undefined button tried to be formatted. ", "ALIVE", MB_OK);
@@ -716,8 +1060,11 @@ void updateAvailableUpgrades(upgradeStruct* upgradeState) {
 
 //Randomizes the list of upgrade buttons that should be shown
 void setupUpgradeList(upgradeStruct* upgradeState, rngStruct* rng) {
+
     //Randomize once
     if (upgradeState->randomizeUpgrades && fetchCurrentState == FreelancerChooseDistrict) {
+        setupMechList(upgradeState);
+
         //Setup always available upgrades
         for (int n = 0; n < upgradeState->alwaysAvailableCount; n++) {
             upgradeState->availableUpgrades->buttonIndex[n] = upgradeState->alwaysAvailableButtons[n];
@@ -740,6 +1087,11 @@ void setupUpgradeList(upgradeStruct* upgradeState, rngStruct* rng) {
                 n--;
             }
         }
+
+        //Set new randomized resources (mech and weapons)
+        setRandomMechAddress(upgradeState, rng);
+
+        //Reset state
         upgradeState->randomizeUpgrades = false;
         upgradeState->consumed = 0;
         upgradeState->removedUpgrades = 0;
@@ -753,6 +1105,8 @@ void setupUpgradeList(upgradeStruct* upgradeState, rngStruct* rng) {
 
 //Logic for upgrade / button press handling
 void handlePressedButton(buttons buttonToHandle, upgradeStruct* upgradeState, varStruct* vars) {
+    char buffer[256];
+
     float refloat;
     if (subtractMoney(getUpgradeCost(buttonToHandle, upgradeState))) {
         upgradeState->consumed++;
@@ -815,8 +1169,11 @@ void handlePressedButton(buttons buttonToHandle, upgradeStruct* upgradeState, va
             refloat += reinterpret_cast<float&>(vars->offsetsNVals.bullets[vars->secondaryIndex][PropMultIdx].val);
             vars->offsetsNVals.bullets[vars->secondaryIndex][PropMultIdx].val += reinterpret_cast<uint32_t&>(refloat);
             break;
-        case Reload:
+        case RandomMech:
+            //snprintf(buffer, 100, "mechAddress = %I64x", upgradeState->randomizedParts.mechAddress);
+            //MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
             vars->resourceUpdateNecessary = true;
+            setNewMech(vars, upgradeState->randomizedParts.mechAddress);
             break;
         default:
             MessageBoxA(NULL, "Error: Undefined button pressed. ", "ALIVE", MB_OK);
@@ -853,22 +1210,29 @@ void handleChooseDistrictMenu(upgradeStruct* upgradeState, varStruct* vars) {
 
             //Handle the pressed mod button
             handlePressedButton(buttonToHandle, upgradeState, vars);
-            
+            //if (vars->resourceUpdateNecessary) {
+            //
+            //    MessageBoxA(NULL, "handlePressedButton", "ALIVE", MB_OK);
+            //}
             //Update weapon vars in memory
             updateResources(vars);
-
+            //if (vars->resourceUpdateNecessary) {
+            //
+            //    MessageBoxA(NULL, "updateResources", "ALIVE", MB_OK);
+            //}
             //Reset selected button to index 0 
             memset((void*)chooseDistrictMenuStruct, 0x0, 2);
 
             if (vars->resourceUpdateNecessary) {
-                setNewMech(vars);
-                writeBytesToDeployedAsm(&updateGameToNewPlayerResources, 0x1, 0, 1);
+                //writeBytesToDeployedAsm(&updateGameToNewPlayerResources, 0x1, 0, 1);
                 vars->resourceUpdateNecessary = false;
             }
         } 
     }
     return;
 }
+
+bool shouldExit = false;
 
 DWORD WINAPI MainThread(LPVOID param) {
     char buffer[256];
@@ -889,10 +1253,15 @@ DWORD WINAPI MainThread(LPVOID param) {
     varStruct variablesStruct{ deployedBaseAddresses, deployedOffsetsAndVals, -1, -1, false, false};
 
     //Repair is set to always show up
-    const buttons alwaysAvailableUpgradesButtons[] = { M_Repair, Reload };
+    const buttons alwaysAvailableUpgradesButtons[] = { M_Repair, RandomMech , P_PosCapacity};
 
     //Setup buffers for formatted strings to be shown by added buttons
     char formattedButtonStrings[addedButtons][maxButtonStringLength];
+
+    //Setup list containing resources we wish to have access to.
+    uint64_t* mechAddressList = new uint64_t[arbitraryResourceCount];
+    uint64_t* weaponAddressList = new uint64_t[arbitraryResourceCount];
+    resourceLists resLists = { mechAddressList, 0, arbitraryResourceCount, weaponAddressList, 0, arbitraryResourceCount };
 
     //Setup upgrade state struct
     upgradeStruct upgradeState{
@@ -908,7 +1277,9 @@ DWORD WINAPI MainThread(LPVOID param) {
         0,
         true,
         0,
-        0
+        0,
+        {0,0,0,0},
+        resLists
     };
 
     //Setup rng
@@ -918,12 +1289,13 @@ DWORD WINAPI MainThread(LPVOID param) {
 
     rngStruct rng{ gen, distrib };
 
-    while (true) {
+    while (!shouldExit) {
         //Uncomment this and the unsuspend at the end of the loop if race conditions cause issues
         //_SetOtherThreadsSuspended(true);
         
         
         if (GetAsyncKeyState(VK_NUMPAD1) & 0x80000) {
+            setupMechList(&upgradeState);
             addMoney(1000000);
             snprintf(buffer, 100, "freelancerMenuState = %llx", (uint32_t)fetchFreelancerMenuState);
             MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
@@ -958,6 +1330,10 @@ DWORD WINAPI MainThread(LPVOID param) {
 
         Sleep(100);
     }
+
+    delete upgradeState.resLists.mechAddresses;
+    delete upgradeState.resLists.weaponAddresses;
+    return 0;
 }
 
 BOOL APIENTRY DllMain( HMODULE hModule,
@@ -980,6 +1356,7 @@ BOOL APIENTRY DllMain( HMODULE hModule,
         //VirtualProtect(executable_area, asms->numberOfBytes, old_protect, &old_protect);
         //VirtualFree(executable_area, asms->numberOfBytes, MEM_RELEASE);
         freePatches();
+        shouldExit = true;
         _SetOtherThreadsSuspended(false);
         break;
     }
