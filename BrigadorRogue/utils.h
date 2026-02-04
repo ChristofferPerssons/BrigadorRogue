@@ -28,3 +28,5 @@ uint64_t GetBaseModuleForProcess();
 void deployExecutableASM(struct asmHook* asms);
 
 void writeBytesToDeployedAsm(struct asmHook* asms, uint64_t input, uint64_t index, unsigned char bytes);
+
+void DebugBox(LPCSTR lpText);

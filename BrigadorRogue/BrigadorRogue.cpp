@@ -17,7 +17,6 @@
 #include "BrigadorRogue.h"
 
 using namespace std;
-
 //Some globals follow but you should use a struct created in the main loop to access them.
 //They are only global since I find it easier to match them to their enum values in this way.
 
@@ -35,22 +34,27 @@ const enum buttons {
     , S_PosProjectilesNegAccuracy
     , S_PosPropMult
     , RandomMech
+    , RandomPrimary
+    , RandomSecondary
 };
 
 //Must correspond to buttons enum
 const char* addedButtonStrings[] = {
-    {"Repair +%dhp $%lld k"}
-    , {"Overcharge +%.1fx $%lld k"}
-    , {"Forward Speed +%.1fx $%lld k"}
-    , {"P: Capacity +%.1fx $%lld k"}
-    , {"P: Fire Rate +%.1fx $%lld k"}
-    , {"P: Projectiles +%d Accuracy -%d $%lld k"}
-    , {"P: Structure Damage +%.1fx $%lld k"}
-    , {"S: Capacity +%.1fx $%lld k"}
-    , {"S: Fire Rate +%.1fx $%lld k"}
-    , {"S: Projectiles +%d Accuracy -%d $%lld k"}
-    , {"S: Structure +%.1fx $%lld k"}
-    , {"%s  $%.01f m"}
+    {"Repair +%dhp $%lldk"}
+    , {"Overcharge +%.1fx $%lldk"}
+    , {"Forward Speed +%.1fx $%lldk"}
+    , {"P: Capacity +%.1fx $%lldk"}
+    , {"P: Fire Rate +%.1fx $%lldk"}
+    , {"P: Projectiles +%d Accuracy -%d $%lldk"}
+    , {"P: Structure Damage +%.1fx $%lldk"}
+    , {"S: Capacity +%.1fx $%lldk"}
+    , {"S: Fire Rate +%.1fx $%lldk"}
+    , {"S: Projectiles +%d Accuracy -%d $%lldk"}
+    , {"S: Structure +%.1fx $%lldk"}
+    , {"%s $%.01fm"}
+    , {"P: %s $%.01fm"}
+    , {"S: %s $%.01fm"}
+
 };
 #define addedButtons sizeof(addedButtonStrings) / sizeof(addedButtonStrings[0])
 
@@ -68,6 +72,8 @@ double baseButtonCosts[addedButtons]{
     , 1000000
     , 1000000
     , 0 
+    , 0
+    , 0
 };
 
 //Values used to determine upgrade magnitude
@@ -185,21 +191,10 @@ struct upgrades {
     buttons buttonIndex[maxAvailableUpgrades];
 };
 
-//Used for holding randomized parts
-struct randMechParts {
-    uint64_t mechAddress;
-    uint64_t primaryAddress;
-    uint64_t secondaryAddress;
-    uint64_t hornAddress;
-};
-
-struct resourceLists {
-    uint64_t* mechAddresses;
-    uint64_t mechAddressesLen;
-    uint64_t mechAddressesMaxLen;
-    uint64_t* weaponAddresses;
-    uint64_t weaponAddressesLen;
-    uint64_t weaponAddressesMaxLen;
+struct resourceList {
+    uint64_t* addresses;
+    uint64_t len;
+    uint64_t maxLen;
 };
 
 struct upgradeStruct {
@@ -216,8 +211,10 @@ struct upgradeStruct {
     bool randomizeUpgrades;
     float repairAmount;
     float maxHealth;
-    randMechParts randomizedParts;
-    resourceLists resLists;
+    uint64_t randomizedMechAddress;
+    uint64_t randomizedWeaponAddresses[maxWeapons];
+    resourceList mechResources;
+    resourceList weaponResources;
 };
 
 struct rngStruct {
@@ -282,7 +279,7 @@ void applyPatches(void) {
     createUIButtonUseSetString.externalReplacementValues[0] = nextStringToPrintAddress;
     deployExecutableASM(&createUIButtonUseSetString);
     deployExecutableASM(&updateGameToNewPlayerResources);
-    //MessageBoxA(NULL, "Patches injected", "Patches injected", MB_OK);
+    //DebugBox("Patches injected", "Patches injected", MB_OK);
 
     _SetOtherThreadsSuspended(false);
 }
@@ -293,82 +290,111 @@ void freePatches(void) {
     VirtualFree((LPVOID)updateGameToNewPlayerResources.hookTarget, 0, MEM_RELEASE);
 }
 
-//Sets up a list of all mech addresses
-//Code massaged from source function at +0xdbf10
-void setupMechList(upgradeStruct* upgradeState) {
+//Sets up a list of all resource addresses
+//Code derived from source function at +0xdbf10 but reduced in scope using assumptions which hopefully hold
+void setupResourceList(resourceList* resList, uint64_t* param_2, uint32_t* param4content, int elems) {
     char buffer[256];
 
-    LPVOID(*getMechAddress)(long long*, uint64_t) = getMechAddressFunction;
+    //Reset resource list
+    resList->len = 0;
+
+    LPVOID(*getResourceAddress)(long long*, uint64_t) = getResourceAddressFunction;
 
     char local_128[64] = { 0 };
 
-    uint64_t* param_2 = fetchMechDictAddress;
-    uint64_t param4content = 0xE;
+    //uint64_t* param_2 = fetchMechDictAddress;
+    //uint64_t param4content = 0xE;
     uint64_t lVar16;
     uint64_t lVar12;
     uint64_t* plVar8;
     uint64_t* local_140 = param_2;
     char* stringKey;
     uint64_t dictIndex;
-    uint64_t mechAddress;
+    uint64_t resAddress;
 
-    lVar16 = param4content;
-    if (local_128[lVar16] == '\0') {
-        local_128[lVar16] = '\x01';
-        lVar12 = 0;
-        plVar8 = param_2 + (lVar16 + 4) * 2;
-        lVar16 = *plVar8;
-        param_2 = local_140;
-        if (0 < lVar16) {
-            do {
-                stringKey = *(char**)(*(uint64_t*)(*local_140 + 0x18) + (uint64_t)*(int*)(plVar8[1] + lVar12 * 4) * 8);
-                //snprintf(buffer, 100, "mech resource string key address = %I64x, count = %d", stringKey, lVar16);
-                //MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+    for (int i = 0; i < elems; i++) {
+        lVar16 = param4content[i];
+        if (local_128[lVar16] == '\0') {
+            local_128[lVar16] = '\x01';
+            lVar12 = 0;
+            plVar8 = param_2 + (lVar16 + 4) * 2;
+            lVar16 = *plVar8;
+            param_2 = local_140;
+            if (0 < lVar16) {
+                do {
+                    stringKey = *(char**)(*(uint64_t*)(*local_140 + 0x18) + (uint64_t) * (int*)(plVar8[1] + lVar12 * 4) * 8);
+                    //snprintf(buffer, 100, "mech resource string key address = %I64x, count = %d", stringKey, lVar16);
+                    //DebugBox(buffer);
 
-                uint64_t stringMatchAddress = (uint64_t)bsearch(&stringKey, *(void**)(*param_2 + 0x18), (uint64_t) * (int*)(*param_2 + 0x10), 8, stringKeyComparisonFunction);
+                    uint64_t stringMatchAddress = (uint64_t)bsearch(&stringKey, *(void**)(*param_2 + 0x18), (uint64_t) * (int*)(*param_2 + 0x10), 8, stringKeyComparisonFunction);
 
-                dictIndex = ((uint64_t)stringMatchAddress - *(uint64_t*)(*param_2 + 0x18) >> 3);
-                //snprintf(buffer, 100, "offset = %I64x", dictIndex);
-                //MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+                    dictIndex = ((uint64_t)stringMatchAddress - *(uint64_t*)(*param_2 + 0x18) >> 3);
+                    //snprintf(buffer, 100, "offset = %I64x", dictIndex);
+                    //DebugBox(buffer);
 
-                mechAddress = (uint64_t)getMechAddress((long long*)param_2, *(uint64_t*)(*(uint64_t*)(*param_2 + 0x28) + dictIndex * 0x8));
-                
-                //snprintf(buffer, 100, "mechAddress = %I64x", mechAddress);
-                //MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+                    resAddress = (uint64_t)getResourceAddress((long long*)param_2, *(uint64_t*)(*(uint64_t*)(*param_2 + 0x28) + dictIndex * 0x8));
 
-                //Increase size of list if necessary 
-                if (lVar12 >= upgradeState->resLists.mechAddressesMaxLen) {
-                    uint64_t* newListAddress = new uint64_t[upgradeState->resLists.mechAddressesMaxLen + arbitraryResourceCount];
-                    
-                    memcpy(newListAddress, upgradeState->resLists.mechAddresses, upgradeState->resLists.mechAddressesMaxLen * sizeof(uint64_t));
-                    
-                    delete upgradeState->resLists.mechAddresses;
-                    upgradeState->resLists.mechAddressesMaxLen += arbitraryResourceCount;
-                    upgradeState->resLists.mechAddresses = newListAddress;
-                }
+                    //snprintf(buffer, 100, "mechAddress = %I64x", mechAddress);
+                    //DebugBox(buffer);
 
-                //Append resource to list
-                upgradeState->resLists.mechAddresses[lVar12] = mechAddress;
+                    //Increase size of list if necessary 
+                    if (lVar12 >= resList->maxLen) {
+                        uint64_t* newListAddress = new uint64_t[resList->maxLen + arbitraryResourceCount];
 
-                //Incremet counter
-                lVar12 = lVar12 + 1;
-                //param_4 = local_160;
-                param_2 = local_140;
-            } while (lVar12 < lVar16);
-            upgradeState->resLists.mechAddressesLen = lVar12;
-            //snprintf(buffer, 100, "mechCount = %d", lVar12);
-            //MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+                        memcpy(newListAddress, resList->addresses, resList->maxLen * sizeof(uint64_t));
+
+                        delete resList->addresses;
+                        resList->maxLen += arbitraryResourceCount;
+                        resList->addresses = newListAddress;
+                    }
+
+                    //Append resource to list
+                    resList->addresses[resList->len + lVar12] = resAddress;
+
+                    //Incremet counter
+                    lVar12 = lVar12 + 1;
+                    //param_4 = local_160;
+                    param_2 = local_140;
+                } while (lVar12 < lVar16);
+                resList->len += lVar12;
+                //snprintf(buffer, 100, "mechCount = %d", lVar12);
+                //DebugBox(buffer);
+            }
         }
     }
 }
 
-void setRandomMechAddress(upgradeStruct* upgradeState, rngStruct* rng) {
+
+#define RESOURCE_NAMES_MUST_BE_VALID_KEY_VAL_PAIR
+void setRandomPartsAddresses(upgradeStruct* upgradeState, rngStruct* rng) {
     char buffer[256];
-    std::uniform_int_distribution<> mechDistrib(0, upgradeState->resLists.mechAddressesLen - 1);
-    int randomIndex = mechDistrib(rng->gen);
-    upgradeState->randomizedParts.mechAddress = upgradeState->resLists.mechAddresses[randomIndex];
-    //snprintf(buffer, 100, "mechAddress = %I64x", upgradeState->randomizedParts.mechAddress);
-    //MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+    std::uniform_int_distribution<> mechDistrib(0, upgradeState->mechResources.len - 1);
+#ifdef RESOURCE_NAMES_MUST_BE_VALID_KEY_VAL_PAIR
+    while (true) {
+#endif // RESOURCE_NAMES_MUST_BE_VALID_KEY_VAL_PAIR
+        int randomIndex = mechDistrib(rng->gen);
+        upgradeState->randomizedMechAddress = upgradeState->mechResources.addresses[randomIndex];
+#ifdef RESOURCE_NAMES_MUST_BE_VALID_KEY_VAL_PAIR
+        if (text_lookup((char*)(upgradeState->randomizedMechAddress + mechNameOffset)) != NULL) {
+            break;
+        }
+    }
+#endif // RESOURCE_NAMES_MUST_BE_VALID_KEY_VAL_PAIR
+
+    std::uniform_int_distribution<> weaponDistrib(0, upgradeState->weaponResources.len - 1);
+    for (int i = 0; i < maxWeapons; i++) {
+#ifdef RESOURCE_NAMES_MUST_BE_VALID_KEY_VAL_PAIR
+        while (true) {
+#endif // RESOURCE_NAMES_MUST_BE_VALID_KEY_VAL_PAIR
+            int randomIndex = weaponDistrib(rng->gen);
+            upgradeState->randomizedWeaponAddresses[i] = upgradeState->weaponResources.addresses[randomIndex];
+#ifdef RESOURCE_NAMES_MUST_BE_VALID_KEY_VAL_PAIR
+            if (text_lookup((char*)(upgradeState->randomizedWeaponAddresses[i] + weaponNameOffset)) != NULL) {
+                break;
+            }
+        }
+#endif // RESOURCE_NAMES_MUST_BE_VALID_KEY_VAL_PAIR
+    }
 }
 
 //Return index to first weapon with the searched for weaponGroup
@@ -377,7 +403,7 @@ int getWeaponIndexOfWeaponGroup(weaponGroups weaponGroup) {
     for (int i = 0; i < maxWeapons; i++) {
         weaponGroups curWeaponGroup = (weaponGroups)fetchDeployedWeaponSocketGroup(i);
         //snprintf(buffer, 100, "weaponGroup = %d, searched for = %d", curWeaponGroup, weaponGroup);
-        //MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+        //DebugBox(buffer);
         if (weaponGroup == curWeaponGroup) {
             return i;
         }
@@ -408,36 +434,36 @@ void updateResources(varStruct* vars) {
     updateVars(vars->baseAddresses.mech, vars->offsetsNVals.mech, mechVars);
     //if (vars->resourceUpdateNecessary) {
     //
-    //    MessageBoxA(NULL, "updateResources1", "ALIVE", MB_OK);
+    //    DebugBox("updateResources1");
     //}
     updateVars(vars->baseAddresses.mechLegs, vars->offsetsNVals.mechLegs, mechLegsVars);
     //if (vars->resourceUpdateNecessary) {
     //
-    //    MessageBoxA(NULL, "updateResources2", "ALIVE", MB_OK);
+    //    DebugBox("updateResources2");
     //}
     for (int i = 0; i < maxWeapons; i++) {
         if (vars->baseAddresses.weapons[i] != NULL) {
             //if (vars->resourceUpdateNecessary) {
             //
             //    snprintf(buffer, 100, "updateResources3 %d", i);
-            //    MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+            //    DebugBox(buffer);
             //}
             updateVars(vars->baseAddresses.weapons[i], vars->offsetsNVals.weapons[i], weaponVars);
             //if (vars->resourceUpdateNecessary) {
             //    snprintf(buffer, 100, "updateResources3.5 %d", i);
-            //    MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+            //    DebugBox(buffer);
             //}
             if (ammoTypeHasBullet(fetchDeployedWeaponAmmoTypeAddress(i))) {
                 //if (vars->resourceUpdateNecessary) {
                 //    snprintf(buffer, 100, "updateResources3.9 %d", i);
-                //    MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+                //    DebugBox(buffer);
                 //}
                 updateVars(vars->baseAddresses.bullets[i], vars->offsetsNVals.bullets[i], bulletVars);
             }
             //if (vars->resourceUpdateNecessary) {
             //
             //    snprintf(buffer, 100, "updateResources4 %d", i);
-            //    MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+            //    DebugBox(buffer);
             //}
             
         }
@@ -515,12 +541,23 @@ void resetResources(varStruct* vars){
     } 
 }
 
+void setNewWeapon(varStruct* vars, upgradeStruct* upgradeState, int weaponIDX) {
+    //Set new weapon
+    fetchDeployedWeaponAddress(weaponIDX) = upgradeState->randomizedWeaponAddresses[weaponIDX];
+
+    //Reset weapon vars
+    resetVars(&vars->baseAddresses.weapons[weaponIDX], vars->offsetsNVals.weapons[weaponIDX], weaponVars, fetchDeployedWeaponAddress(weaponIDX));
+    if (vars->baseAddresses.weapons[weaponIDX] != NULL && ammoTypeHasBullet(fetchDeployedWeaponAmmoTypeAddress(weaponIDX))) {
+        resetVars(&vars->baseAddresses.bullets[weaponIDX], vars->offsetsNVals.bullets[weaponIDX], bulletVars, fetchDeployedWeaponBulletAddress(weaponIDX));
+    }
+}
+
 //Updates the memory of the deployed struct to a new mech and reset weapons to use its assigned default weapons
 //Must be called before trying to save and reload the mech to get valid values after changing the deployed mech
-void setNewMech(varStruct* vars, uint64_t newMechAddress) {
+void setNewMech(varStruct* vars, upgradeStruct* upgradeState) {
     char buffer[256];
     //Set new deployed mech
-    fetchDeployedMechAddress = newMechAddress;
+    fetchDeployedMechAddress = upgradeState->randomizedMechAddress;
 
     //Get a stable copy of primary and secondary weapon data 
     uint64_t primaryAddress = vars->baseAddresses.weapons[vars->primaryIndex];
@@ -562,10 +599,10 @@ void setNewMech(varStruct* vars, uint64_t newMechAddress) {
         fetchDeployedWeaponSocketGroup(i) = 0xFFFFFFFF;
     }
 
-    //MessageBoxA(NULL, "1", "ALIVE", MB_OK);
+    //DebugBox("1");
 
     uint64_t defaultSocketsToHandle = fetchDeployedMechDefaultSocketAmount;
-    //MessageBoxA(NULL, "1.1", "ALIVE", MB_OK);
+    //DebugBox("1.1");
 
 
     uint64_t socketsToHandle = 0;
@@ -573,17 +610,17 @@ void setNewMech(varStruct* vars, uint64_t newMechAddress) {
     uint64_t legsSockets = 0;
     uint64_t hullSockets = 0;
     if (fetchDeployedMechChassisAddress) {
-        //MessageBoxA(NULL, "Chassis", "ALIVE", MB_OK);
+        //DebugBox("Chassis");
         chassisSockets = fetchDeployedMechChassisSocketAmount;
         socketsToHandle += chassisSockets;
     }
     if (fetchDeployedMechLegsAddress) {
-        //MessageBoxA(NULL, "Legs", "ALIVE", MB_OK);
+        //DebugBox("Legs");
         legsSockets = fetchDeployedMechLegsSocketAmount;
         socketsToHandle += legsSockets;
     }
     if (fetchDeployedMechHullAddress) {
-        //MessageBoxA(NULL, "Hull", "ALIVE", MB_OK);
+        //DebugBox("Hull");
         hullSockets = fetchDeployedMechHullSocketAmount;
         socketsToHandle += hullSockets;
     }
@@ -600,7 +637,6 @@ void setNewMech(varStruct* vars, uint64_t newMechAddress) {
         uint64_t addressToSet = 0;
         //Search for a default weapon matching the current socket
         bool defaultMatchHandled = false;
-        //Only use default for non-primary/secondary weapons. Eg, primary and secondary are persistent across mechs
         for (int k = 0; k < defaultSocketsToHandle; k++) {
             if (strcmp((char*)fetchDeployedMechChassisSocketString(virtuali), (char*)fetchDeployedMechDefaultSocketString(k)) == 0) {
                 if ((fetchDeployedMechDefaultSocketWeaponList(k))[0]) {
@@ -620,16 +656,16 @@ void setNewMech(varStruct* vars, uint64_t newMechAddress) {
                 addressToSet = secondaryAddress;
             }
             else {
-                //MessageBoxA(NULL, "Warning: Chassis weapon with default weapon group not already present in deployed struct. Using arbitrary weapon (secondary)", "ALIVE", MB_OK);
-                //snprintf(buffer, 100, "weaponIndex = %d, searched for = %d", i, nonDefaultweaponGroup);
-                //MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
-                int weaponIndex = getWeaponIndexOfWeaponGroup(nonDefaultweaponGroup);
-                if (weaponIndex != -1) {
-                    addressToSet = secondaryAddress;
-                }
-                else {
-                    addressToSet = secondaryAddress;
-                }
+                //Set a random weapon for other weapon groups
+                DebugBox("Setting random Weapon on what should be a default socket");
+                addressToSet = upgradeState->randomizedWeaponAddresses[i];
+                //int weaponIndex = getWeaponIndexOfWeaponGroup(nonDefaultweaponGroup);
+                //if (weaponIndex != -1) {
+                //    addressToSet = secondaryAddress;
+                //}
+                //else {
+                //    addressToSet = secondaryAddress;
+                //}
             }
         }
         fetchDeployedWeaponAddress(i) = addressToSet;
@@ -670,16 +706,15 @@ void setNewMech(varStruct* vars, uint64_t newMechAddress) {
                 addressToSet = secondaryAddress;
             }
             else {
-                //MessageBoxA(NULL, "ERROR: Legs weapon with primary/secondary or default weapon group not already present in deployed struct. Using arbitrary weapon (secondary)", "ALIVE", MB_OK);
-                //snprintf(buffer, 100, "weaponIndex = %d, searched for = %d", i, nonDefaultweaponGroup);
-                //MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
-                int weaponIndex = getWeaponIndexOfWeaponGroup(nonDefaultweaponGroup);
-                if (weaponIndex != -1) {
-                    addressToSet = secondaryAddress;
-                }
-                else {
-                    addressToSet = secondaryAddress;
-                }
+                DebugBox("Setting random Weapon on what should be a default socket");
+                addressToSet = upgradeState->randomizedWeaponAddresses[i];
+                //int weaponIndex = getWeaponIndexOfWeaponGroup(nonDefaultweaponGroup);
+                //if (weaponIndex != -1) {
+                //    addressToSet = secondaryAddress;
+                //}
+                //else {
+                //    addressToSet = secondaryAddress;
+                //}
 
             }
         }
@@ -722,17 +757,15 @@ void setNewMech(varStruct* vars, uint64_t newMechAddress) {
                 addressToSet = secondaryAddress;
             }
             else {
-                //MessageBoxA(NULL, "ERROR: Hull weapon with primary/secondary or default weapon group not already present in deployed struct. Using arbitrary weapon (secondary)", "ALIVE", MB_OK);
-                //snprintf(buffer, 100, "weaponIndex = %d, searched for = %d", i, nonDefaultweaponGroup);
-                //MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
-                int weaponIndex = getWeaponIndexOfWeaponGroup(nonDefaultweaponGroup);
-                if (weaponIndex != -1) {
-                    addressToSet = secondaryAddress;
-                }
-                else {
-                    addressToSet = secondaryAddress;
-                }
-
+                DebugBox("Setting random Weapon on what should be a default socket");
+                addressToSet = upgradeState->randomizedWeaponAddresses[i];
+                //int weaponIndex = getWeaponIndexOfWeaponGroup(nonDefaultweaponGroup);
+                //if (weaponIndex != -1) {
+                //    addressToSet = secondaryAddress;
+                //}
+                //else {
+                //    addressToSet = secondaryAddress;
+                //}
             }
         }
         fetchDeployedWeaponAddress((i + chassisSockets + legsSockets)) = addressToSet;
@@ -757,7 +790,7 @@ void setNewMech(varStruct* vars, uint64_t newMechAddress) {
     resetResources(vars);
 
     //snprintf(buffer, 100, "PrimaryIdx = %d, SecondaryIdx = %d", vars->primaryIndex, vars->secondaryIndex);
-    //MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+    //DebugBox(buffer);
 
     //Update primary and secondary vars to original values
     for (int i = 0; i < maxWeapons; i++) {
@@ -906,13 +939,13 @@ uint64_t getPlayerAddress() {
                 if (((uVar4 < (unsigned long long)(*(long long*)(lVar1 + 8 + uVar3 * 0x30) - lVar2 >> 4)) &&
                     (*(int*)(lVar2 + uVar4 * 0x10) == param_3[2])) &&
                     (*(long long*)(lVar2 + 8 + uVar4 * 0x10) != 0)) {
-                    //MessageBoxA(NULL, "Found Player Address", "ALIVE", MB_OK);
+                    //DebugBox("Found Player Address");
                     return *(uint64_t*)(lVar2 + 8 + uVar4 * 0x10);
                 }
             }
         }
     }
-    //MessageBoxA(NULL, "Could not find player address", "ALIVE", MB_OK);
+    //DebugBox("Could not find player address");
     return 0;
 }
 
@@ -1032,11 +1065,25 @@ void formatButtonStrings(upgradeStruct* upgradeState) {
             snprintf(upgradeState->formattedButtonStrings[i],
                 maxButtonStringLength,
                 addedButtonStrings[i],
-                text_lookup((char*)(upgradeState->randomizedParts.mechAddress + mechNameOffset)),
+                text_lookup((char*)(upgradeState->randomizedMechAddress + mechNameOffset)),
+                (float)(getUpgradeCost((buttons)i, upgradeState) / (double)1000000));
+            break;
+        case RandomPrimary:
+            snprintf(upgradeState->formattedButtonStrings[i],
+                maxButtonStringLength,
+                addedButtonStrings[i],
+                text_lookup((char*)(upgradeState->randomizedWeaponAddresses[getWeaponIndexOfWeaponGroup(PrimaryGroup)] + weaponNameOffset)),
+                (float)(getUpgradeCost((buttons)i, upgradeState) / (double)1000000));
+            break;
+        case RandomSecondary:
+            snprintf(upgradeState->formattedButtonStrings[i],
+                maxButtonStringLength,
+                addedButtonStrings[i],
+                text_lookup((char*)(upgradeState->randomizedWeaponAddresses[getWeaponIndexOfWeaponGroup(SecondaryGroup)] + weaponNameOffset)),
                 (float)(getUpgradeCost((buttons)i, upgradeState) / (double)1000000));
             break;
         default:
-            MessageBoxA(NULL, "Error: Undefined button tried to be formatted. ", "ALIVE", MB_OK);
+            DebugBox("Error: Undefined button tried to be formatted. ");
             return;
         }
     }
@@ -1060,11 +1107,19 @@ void updateAvailableUpgrades(upgradeStruct* upgradeState) {
 }
 
 //Randomizes the list of upgrade buttons that should be shown
-void setupUpgradeList(upgradeStruct* upgradeState, rngStruct* rng) {
-
+void setupUpgradeList(upgradeStruct* upgradeState, varStruct* vars, rngStruct* rng) {
+    char buffer[256];
     //Randomize once
     if (upgradeState->randomizeUpgrades && fetchCurrentState == FreelancerChooseDistrict) {
-        setupMechList(upgradeState);
+        uint32_t mechOffsetList[1] = { 0xE };
+        setupResourceList(&upgradeState->mechResources, fetchResourceDictAddress, mechOffsetList, 1);
+        snprintf(buffer, 100, "Mech resources = %d", upgradeState->mechResources.len);
+        DebugBox(buffer);
+
+        uint32_t weaponOffsetList[3] = { 0x7, 0x8, 0x9 };
+        setupResourceList(&upgradeState->weaponResources, fetchResourceDictAddress, weaponOffsetList, 3); //0x0000000800000007, 1);
+        snprintf(buffer, 100, "Weapon resources = %d", upgradeState->weaponResources.len);
+        DebugBox(buffer);
 
         //Setup always available upgrades
         for (int n = 0; n < upgradeState->alwaysAvailableCount; n++) {
@@ -1089,25 +1144,41 @@ void setupUpgradeList(upgradeStruct* upgradeState, rngStruct* rng) {
             }
         }
 
-        //Set new randomized resources (mech and weapons)
-        setRandomMechAddress(upgradeState, rng);
-        upgradeState->upgradesCost[RandomMech] = *(double*)(upgradeState->randomizedParts.mechAddress + mechCostOffset);
+        DebugBox("Start randomizing all parts");
 
+        //Set new randomized resources (mech and weapons)
+        setRandomPartsAddresses(upgradeState, rng);
+        DebugBox("Randomized all parts");
+
+        snprintf(buffer, 100, "Random mech address = %I64x", upgradeState->randomizedMechAddress);
+        DebugBox(buffer);
+        upgradeState->upgradesCost[RandomMech] = *(double*)(upgradeState->randomizedMechAddress + mechCostOffset);
+        
+        snprintf(buffer, 100, "Random primary address = %I64x", upgradeState->randomizedWeaponAddresses[vars->primaryIndex]);
+        DebugBox(buffer);
+        upgradeState->upgradesCost[RandomPrimary] = *(double*)(upgradeState->randomizedWeaponAddresses[vars->primaryIndex] + weaponCostOffset);
+        
+        snprintf(buffer, 100, "Random secondary address = %I64x", upgradeState->randomizedWeaponAddresses[vars->secondaryIndex]);
+        DebugBox(buffer);
+        upgradeState->upgradesCost[RandomSecondary] = *(double*)(upgradeState->randomizedWeaponAddresses[vars->secondaryIndex] + weaponCostOffset);
+        
+
+        DebugBox("Set new costs according to parts");
 
         //Reset state
         upgradeState->randomizeUpgrades = false;
-        upgradeState->consumed = 0;
-        upgradeState->removedUpgrades = 0;
         updateAvailableUpgrades(upgradeState);
     }
     //Prepare to randomize when player next enters the choose district menu.
     else if (!upgradeState->randomizeUpgrades && fetchCurrentState != FreelancerChooseDistrict) {
+        upgradeState->consumed = 0;
+        upgradeState->removedUpgrades = 0;
         upgradeState->randomizeUpgrades = true;
     }
 }
 
 //Logic for upgrade / button press handling
-void handlePressedButton(buttons buttonToHandle, upgradeStruct* upgradeState, varStruct* vars) {
+void handlePressedButton(buttons buttonToHandle, upgradeStruct* upgradeState, varStruct* vars, rngStruct* rng) {
     char buffer[256];
 
     float refloat;
@@ -1174,21 +1245,39 @@ void handlePressedButton(buttons buttonToHandle, upgradeStruct* upgradeState, va
             break;
         case RandomMech:
             //snprintf(buffer, 100, "mechAddress = %I64x", upgradeState->randomizedParts.mechAddress);
-            //MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+            //DebugBox(buffer);
             vars->resourceUpdateNecessary = true;
-            setNewMech(vars, upgradeState->randomizedParts.mechAddress);
+            DebugBox("Set");
+            setNewMech(vars, upgradeState);
+            DebugBox("Setted");
+            break;
+        case RandomPrimary:
+            //snprintf(buffer, 100, "mechAddress = %I64x", upgradeState->randomizedParts.mechAddress);
+            //DebugBox(buffer);
+            DebugBox("Set");
+            setNewWeapon(vars, upgradeState, vars->primaryIndex);
+            DebugBox("Setted");
+            break;
+        case RandomSecondary:
+            //snprintf(buffer, 100, "mechAddress = %I64x", upgradeState->randomizedParts.mechAddress);
+            //DebugBox(buffer);
+            DebugBox("Set");
+            setNewWeapon(vars, upgradeState, vars->secondaryIndex);
+            DebugBox("Setted");
             break;
         default:
-            MessageBoxA(NULL, "Error: Undefined button pressed. ", "ALIVE", MB_OK);
+            DebugBox("Error: Undefined button pressed. ");
             return;
         }
-        updateAvailableUpgrades(upgradeState);
+        setupUpgradeList(upgradeState, vars, rng);
+        DebugBox("setupUpgradeList");
+
     }
 }
 
 
 //Handles a player's action on the choose district menu in freelancer by observing the state of the currently selected button
-void handleChooseDistrictMenu(upgradeStruct* upgradeState, varStruct* vars) {
+void handleChooseDistrictMenu(upgradeStruct* upgradeState, varStruct* vars, rngStruct* rng) {
     if (addButtonsChooseDistrict.isDeployed && fetchCurrentState == FreelancerChooseDistrict) {
         uint64_t chooseDistrictMenuStruct = (*(uint64_t*)(*(uint64_t*)keyAddress + stateStructOffset) + 0x128 + 0x3e * 0x88);
         uint32_t chooseDistrictMenuIndex = (*(uint32_t*)chooseDistrictMenuStruct) & 0xffff;   
@@ -1212,16 +1301,16 @@ void handleChooseDistrictMenu(upgradeStruct* upgradeState, varStruct* vars) {
             buttons buttonToHandle = upgradeState->availableUpgrades->buttonIndex[distanceFromOriginalItem - 1];
 
             //Handle the pressed mod button
-            handlePressedButton(buttonToHandle, upgradeState, vars);
+            handlePressedButton(buttonToHandle, upgradeState, vars, rng);
             //if (vars->resourceUpdateNecessary) {
             //
-            //    MessageBoxA(NULL, "handlePressedButton", "ALIVE", MB_OK);
+                DebugBox("handlePressedButton");
             //}
             //Update weapon vars in memory
             updateResources(vars);
             //if (vars->resourceUpdateNecessary) {
             //
-            //    MessageBoxA(NULL, "updateResources", "ALIVE", MB_OK);
+                DebugBox("updateResources");
             //}
             //Reset selected button to index 0 
             memset((void*)chooseDistrictMenuStruct, 0x0, 2);
@@ -1255,33 +1344,36 @@ DWORD WINAPI MainThread(LPVOID param) {
     varStruct variablesStruct{ deployedBaseAddresses, deployedOffsetsAndVals, -1, -1, false, false};
 
     //Repair is set to always show up
-    const buttons alwaysAvailableUpgradesButtons[] = { RandomMech };
+    const buttons alwaysAvailableUpgradesButtons[] = { RandomMech, RandomPrimary, RandomSecondary };
 
     //Setup buffers for formatted strings to be shown by added buttons
     char formattedButtonStrings[addedButtons][maxButtonStringLength];
 
     //Setup list containing resources we wish to have access to.
     uint64_t* mechAddressList = new uint64_t[arbitraryResourceCount];
+    resourceList mechList = { mechAddressList, 0, arbitraryResourceCount };
     uint64_t* weaponAddressList = new uint64_t[arbitraryResourceCount];
-    resourceLists resLists = { mechAddressList, 0, arbitraryResourceCount, weaponAddressList, 0, arbitraryResourceCount };
+    resourceList weaponList = { weaponAddressList, 0, arbitraryResourceCount };
 
     //Setup upgrade state struct
     upgradeStruct upgradeState{
-        &upgradeList,
-        formattedButtonStrings,
-        baseButtonCosts,
-        sizeof(alwaysAvailableUpgradesButtons) / sizeof(alwaysAvailableUpgradesButtons[0]),
-        alwaysAvailableUpgradesButtons,
-        4,
-        0,
-        5,
-        0,
-        0,
-        true,
-        0,
-        0,
-        {0,0,0,0},
-        resLists
+        .availableUpgrades = &upgradeList,
+        .formattedButtonStrings = formattedButtonStrings,
+        .upgradesCost = baseButtonCosts,
+        .alwaysAvailableCount = sizeof(alwaysAvailableUpgradesButtons) / sizeof(alwaysAvailableUpgradesButtons[0]),
+        .alwaysAvailableButtons = alwaysAvailableUpgradesButtons,
+        .availableCount = 4,
+        .freeUpgradesPerLevel = 10,
+        .consumeMax = 5,
+        .consumed = 0,
+        .removedUpgrades = 0,
+        .randomizeUpgrades = true,
+        .repairAmount = 0,
+        .maxHealth = 0,
+        .randomizedMechAddress = 0,
+        .randomizedWeaponAddresses = {0,0,0,0,0,0,0,0,0},
+        .mechResources = mechList,
+        .weaponResources = weaponList
     };
 
     //Setup rng
@@ -1297,17 +1389,18 @@ DWORD WINAPI MainThread(LPVOID param) {
         
         
         if (GetAsyncKeyState(VK_NUMPAD1) & 0x80000) {
-            setupMechList(&upgradeState);
+            uint32_t mechOffsetList[1] = { 0xE };
+            setupResourceList(&upgradeState.mechResources, fetchResourceDictAddress, mechOffsetList, 1);
             addMoney(1000000);
             snprintf(buffer, 100, "freelancerMenuState = %llx", (uint32_t)fetchFreelancerMenuState);
-            MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+            DebugBox(buffer);
             snprintf(buffer, 100, "playerAddress = %#016x", getPlayerAddress());
-            MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+            DebugBox(buffer);
             if (getPlayerHealth() != 0) {
                 snprintf(buffer, 100, "playerHealthAddress = %#016x", getPlayerHealthAddress);
-                MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+                DebugBox(buffer);
                 snprintf(buffer, 100, "playerHealth = %f", *(float*)getPlayerHealthAddress);
-                MessageBoxA(NULL, buffer, "ALIVE", MB_OK);
+                DebugBox(buffer);
                 *(float*)getPlayerHealthAddress += 100;
             }
         }
@@ -1323,18 +1416,18 @@ DWORD WINAPI MainThread(LPVOID param) {
         //handleFreelancerMenu();
 
         //Randomize the list of available upgrades
-        setupUpgradeList(&upgradeState, &rng);
+        setupUpgradeList(&upgradeState, &variablesStruct, &rng);
 
         //Handle logic in freelancer choose district menu
-        handleChooseDistrictMenu(&upgradeState, &variablesStruct);
+        handleChooseDistrictMenu(&upgradeState, &variablesStruct, &rng);
 
         //_SetOtherThreadsSuspended(false);
 
         Sleep(100);
     }
 
-    delete upgradeState.resLists.mechAddresses;
-    delete upgradeState.resLists.weaponAddresses;
+    delete upgradeState.mechResources.addresses;
+    delete upgradeState.weaponResources.addresses;
     return 0;
 }
 
@@ -1347,7 +1440,7 @@ BOOL APIENTRY DllMain( HMODULE hModule,
     {
     case DLL_PROCESS_ATTACH:
         baseModule = GetBaseModuleForProcess();
-        //MessageBoxA(NULL, "DLL injected", "DLL injected", MB_OK);
+        //DebugBox("DLL injected", "DLL injected", MB_OK);
         applyPatches();
         CreateThread(0, 0, MainThread, hModule, 0, 0);
     case DLL_THREAD_ATTACH:

@@ -12,6 +12,8 @@
 #include <random>
 #include "utils.h"
 
+//#define DEBUG
+
 using namespace std;
 
 int fileToBytes(char* name, char* buffer) {
@@ -194,4 +196,10 @@ unsigned char readByteFromDeployedAsm(struct asmHook* asms, uint64_t index) {
     unsigned char ret = *(unsigned char*)(asms->hookTarget + asmSize - asms->numberOfWritableBytes + index);
     //_SetOtherThreadsSuspended(false);
     return ret;
+}
+
+void DebugBox(LPCSTR lpText) {
+#ifdef DEBUG
+   MessageBoxA(NULL, lpText, "Debug", MB_OK);
+#endif // DEBUG
 }

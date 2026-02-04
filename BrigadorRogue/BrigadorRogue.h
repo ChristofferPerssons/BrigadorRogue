@@ -170,9 +170,9 @@ const enum freelancerMenuStates {
 
 #define fetchDeployedWeaponCount *(uint32_t*)(*(uint64_t*)keyAddress + 0x2d10)
 
-#define fetchMechDictAddress *(uint64_t**)(baseModule+0x224CB8)
+#define fetchResourceDictAddress *(uint64_t**)(baseModule+0x224CB8)
 #define stringKeyComparisonFunction (_CoreCrtNonSecureSearchSortCompareFunction)(baseModule + 0xdda40)
-#define getMechAddressFunction (LPVOID(*)(long long*, uint64_t))(baseModule + 0xe0f20)
+#define getResourceAddressFunction (LPVOID(*)(long long*, uint64_t))(baseModule + 0xe0f20)
 
 //This value is arbitrary and can be changed. It sets the minimum size and expansion rate for arrays containing resource addresses
 #define arbitraryResourceCount 1024
@@ -180,3 +180,7 @@ const enum freelancerMenuStates {
 #define mechCostOffset 0x1208
 
 #define mechNameOffset 0x1188
+
+#define weaponCostOffset 0x4e8
+
+#define weaponNameOffset 0x430
