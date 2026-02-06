@@ -1468,7 +1468,7 @@ DWORD WINAPI MainThread(LPVOID param) {
     varStruct variablesStruct{ deployedBaseAddresses, deployedOffsetsAndVals, -1, -1, false, false, false};
 
     //Repair is set to always show up
-    const buttons alwaysAvailableUpgradesButtons[] = { RandomMech, RandomPrimary, RandomSecondary, P_PosCapacity};
+    const buttons alwaysAvailableUpgradesButtons[] = { RandomMech };
 
     //Setup buffers for formatted strings to be shown by added buttons
     char formattedButtonStrings[addedButtons][maxButtonStringLength];
