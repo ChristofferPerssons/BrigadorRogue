@@ -12,8 +12,6 @@
 #include <random>
 #include "utils.h"
 
-//#define DEBUG
-
 using namespace std;
 
 int fileToBytes(char* name, char* buffer) {
@@ -198,8 +196,3 @@ unsigned char readByteFromDeployedAsm(struct asmHook* asms, uint64_t index) {
     return ret;
 }
 
-void DebugBox(LPCSTR lpText) {
-#ifdef DEBUG
-   MessageBoxA(NULL, lpText, "Debug", MB_OK);
-#endif // DEBUG
-}

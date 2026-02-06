@@ -40,7 +40,7 @@ const enum states {
 #define maxOverchargeOffset 0x10b8
 #define maxHealthOffset 0x10c0
 
-#define fetchDeployedMechLegsAddress  *(uint64_t*)(*(uint64_t*)(*(uint64_t*)keyAddress + mechOffset)+mechLegsOffset)
+#define fetchDeployedMechLegsAddress  *(uint64_t*)(fetchDeployedMechAddress+mechLegsOffset)
 #define maxForwardSpeedOffset 0x354
 
 
@@ -50,6 +50,7 @@ const enum states {
 #define weaponCooldownOffset 0x0
 #define weaponShotCountOffset 0x28
 #define weaponAccuracyOffset 0x10
+#define fetchWeaponCapacity(weaponAddress) *(int32_t*)((weaponAddress) + weaponVarsOffset + weaponCapacityOffset)
 
 #define fetchDeployedWeaponBulletAddress(y)  *(uint64_t*)(*(uint64_t*)(*(uint64_t*)keyAddress + weaponOffset(y))+bulletOffset)
 #define bulletPropMultOffset 0x24
@@ -184,3 +185,63 @@ const enum freelancerMenuStates {
 #define weaponCostOffset 0x4e8
 
 #define weaponNameOffset 0x430
+
+#define resourceJsonOffset -0x10
+#define fetchResourceJsonString(address) *(char**)((address)+resourceJsonOffset)
+
+#define saveMechJsonOffset 52
+#define saveMechWeaponCountOffset 252
+#define saveWeaponJsonOffset 256
+#define saveWeaponSocketIdOffset 320
+#define saveWeaponSocketGroupOffset 328
+#define saveWeaponSocketStringOffset 332
+#define saveWeaponDataSize 140
+
+
+
+#define fetchMechDefaultSocketAmount(mechAddress)  *(uint32_t*)(mechAddress + 0xb0)
+
+#define fetchMechLegsAddress(mechAddress) *(uint64_t*)(mechAddress+mechLegsOffset)
+
+
+#define fetchMechLegsSocketAmount(mechAddress) *(uint32_t*)(fetchMechLegsAddress(mechAddress) + 0x8)
+
+#define fetchMechLegsSocketID(idx, mechAddress) *(uint32_t*)(fetchMechLegsAddress(mechAddress) + 0x34 + (idx)*0x34)
+
+#define fetchMechLegsSocketString(idx, mechAddress) (char*)(fetchMechLegsAddress(mechAddress) + 0x14 + (idx)*0x34)
+
+#define fetchMechLegsSocketWeaponGroup(idx, mechAddress) *(uint32_t*)(fetchMechLegsAddress(mechAddress) + 0x34 + (idx)*0x34 + 0x4)
+
+#define mechHullOffset 0x88
+
+#define fetchMechHullAddress(mechAddress) *(uint64_t*)(mechAddress + mechHullOffset)
+
+#define fetchMechHullSocketAmount(mechAddress) *(uint32_t*)(fetchMechHullAddress(mechAddress) + 0x8)
+
+#define fetchMechHullSocketID(idx, mechAddress) *(uint32_t*)(fetchMechHullAddress(mechAddress) + 0x34 + (idx)*0x34)
+
+#define fetchMechHullSocketString(idx, mechAddress) (char*)(fetchMechHullAddress(mechAddress) + 0x14 + (idx)*0x34)
+
+#define fetchMechHullSocketWeaponGroup(idx, mechAddress) *(uint32_t*)(fetchMechHullAddress(mechAddress) + 0x34 + (idx)*0x34 + 0x4)
+
+#define mechChassisOffset 0x90
+
+#define fetchMechChassisAddress(mechAddress) *(uint64_t*)(mechAddress + mechChassisOffset)
+
+#define fetchMechChassisSocketAmount(mechAddress) *(uint32_t*)(fetchMechChassisAddress(mechAddress) + 0x8)
+
+#define fetchMechChassisSocketID(idx, mechAddress) *(uint32_t*)(fetchMechChassisAddress(mechAddress) + 0x34 + (idx)*0x34)
+
+#define fetchMechChassisSocketString(idx, mechAddress) (char*)(fetchMechChassisAddress(mechAddress) + 0x14 + (idx)*0x34)
+
+#define fetchMechChassisSocketWeaponGroup(idx, mechAddress) *(uint32_t*)(fetchMechChassisAddress(mechAddress) + 0x34 + (idx)*0x34 + 0x4)
+
+#define fetchMechDefaultSocketAmount(mechAddress) *(uint32_t*)(mechAddress + 0xb0)
+
+#define fetchMechDefaultSocketWeaponAmount(idx, mechAddress) *(uint32_t*)(mechAddress + 0xb8 + (idx)*0x70)
+
+#define fetchMechDefaultSocketWeaponList(idx, mechAddress) (uint64_t*)(mechAddress + 0xb8 + (idx)*0x70 + 0x8)
+
+#define fetchMechDefaultSocketString(idx, mechAddress) (char*)(mechAddress + 0xb8 + (idx)*0x70 + 0x48)
+
+#define fetchMechDefaultSocketID(idx, mechAddress) *(uint32_t*)(mechAddress + 0xb8 + (idx)*0x70 + 0x68)

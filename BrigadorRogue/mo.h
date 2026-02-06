@@ -16,3 +16,4 @@ struct Localization_Text {
 };
 
 char* text_lookup(char* s);
+int os_read_entire_file(FILE* file, void** data_return);

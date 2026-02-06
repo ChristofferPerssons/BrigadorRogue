@@ -288,10 +288,10 @@ Localization_Text::~Localization_Text() {
 Localization_Text* the_localization_text = new Localization_Text();
 char* text_lookup(char* s) {
     Localization_Text* loc = the_localization_text;
-    if (!loc->mo_data) return NULL;
+    if (!loc->mo_data) return s;
 
     int target_index = get_target_index(loc, s);
-    if (target_index == -1) return NULL;  // Maybe we want to log an error?
+    if (target_index == -1) return s;  // Maybe we want to log an error?
 
     return get_translated_string(loc, target_index);
 }
