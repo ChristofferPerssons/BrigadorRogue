@@ -58,6 +58,9 @@
     <None Include="Patches\SetState">
       <Filter>Resource Files</Filter>
     </None>
+    <None Include="Patches\updateGameToNewPlayerResourcesV3">
+      <Filter>Resource Files</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <MASM Include="Patches\addButtonsChooseDistrictV3.ASM">
@@ -70,6 +73,9 @@
       <Filter>Resource Files</Filter>
     </MASM>
     <MASM Include="Patches\SetState.ASM">
+      <Filter>Resource Files</Filter>
+    </MASM>
+    <MASM Include="Patches\updateGameToNewPlayerResourcesV3.ASM">
       <Filter>Resource Files</Filter>
     </MASM>
   </ItemGroup>

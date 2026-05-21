@@ -5,7 +5,7 @@ Increase your destructive and defensive capability by purchasing upgrades for yo
 Each upgrade you purchase randomizes the selection and increases all prices. The increased cost is reset after completing a mission.
 
 Requirements:
-BrigadorRogue: 64bit Windows GoG version of Brigador v1.63.
+BrigadorRogue: 64bit Windows GoG or Steam version of Brigador v1.63. Steam version is almost untested but seems to work fine.
 BrigadorPatcher: Both GoG and Steam version of Brigador v1.63 have been reported to work.
 
 Installation:

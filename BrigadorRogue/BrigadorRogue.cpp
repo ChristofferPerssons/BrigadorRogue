@@ -259,13 +259,13 @@ asmHook addButtonsChooseDistrict{
     "addButtonsChooseDistrictV3",
     294,
     120,
-    0x68e28,
+    addButtonsChooseDistrictLocation,
     16,
     NULL,
     26,
     false,
     { {132} },
-    { {0x68d12} }, // True loop start at 0x68d12
+    { {addButtonsChooseDistrictLocation + addButtonsChooseDistrictLocationLoopOffset} }, // True loop start at 0x68d12
     { {270}, {278} }, //stringArrayAddres, buttonsToAdd
     { {(uint64_t)upgradeList.upgradeText}, {0} }
 };
@@ -275,7 +275,7 @@ asmHook createUIButtonUseSetString{
     "createUIButtonUseSetString",
     173,
     120,
-    0x754d0,
+    createUIButtonUseSetStringLocation,
     14,
     NULL,
     8,
@@ -715,13 +715,13 @@ asmHook updateGameToNewPlayerResources{
     "updateGameToNewPlayerResourcesV3",
     221,
     120,
-    0x6ea6a,
+    updateGameToNewPlayerResourcesLocation,
     13,
     NULL,
     1,
     false,
     {{125}, {138}, {176}, {189}},
-    { {0xf18d0}, {0x192720}, {0x1311d0}, {0x130440} },
+    { {updateGameToNewPlayerResourcesFunc1}, {updateGameToNewPlayerResourcesFunc2}, {updateGameToNewPlayerResourcesCmdSave}, {updateGameToNewPlayerResourcesCmdLoad} }, //func1, func2, cmdSave, cmdLoad
     {{163}},
     {{(uint64_t)updateDeployedMem}}
 };

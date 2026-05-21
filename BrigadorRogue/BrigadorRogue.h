@@ -3,9 +3,35 @@
 uint64_t baseModule;
 //During the game loop the value of Base+RootOffset is often contained within r14. 
 // This value is the key to finding pointer paths. Most (if not all) paths begin with this value.
-#define rootOffset 0x4fdc18
+
+// GOG
+//#define rootOffset 0x4fdc18
+// 
+// Steam
+#define rootOffset 0x4fda68
+
 #define keyAddress (baseModule + rootOffset)
 
+// PatchLocations
+// GOG
+//#define addButtonsChooseDistrictLocation 0x68e28
+//#define addButtonsChooseDistrictLocationLoopOffset -0x116
+//#define createUIButtonUseSetStringLocation 0x754d0
+//#define updateGameToNewPlayerResourcesLocation 0x6ea6a
+//#define updateGameToNewPlayerResourcesFunc1 0xf18d0
+//#define updateGameToNewPlayerResourcesFunc2 0x192720
+//#define updateGameToNewPlayerResourcesCmdSave 0x1311d0
+//#define updateGameToNewPlayerResourcesCmdLoad 0x130440
+//
+// Steam
+#define addButtonsChooseDistrictLocation 0x68de8
+#define addButtonsChooseDistrictLocationLoopOffset -0x116
+#define createUIButtonUseSetStringLocation 0x75480
+#define updateGameToNewPlayerResourcesLocation 0x6ea2a
+#define updateGameToNewPlayerResourcesFunc1 0xf1960
+#define updateGameToNewPlayerResourcesFunc2 0x1926b0
+#define updateGameToNewPlayerResourcesCmdSave 0x131170
+#define updateGameToNewPlayerResourcesCmdLoad 0x1303e0
 
 const enum states {
     MainMenu = 0x2,
@@ -114,8 +140,11 @@ const enum freelancerMenuStates {
 #define offsetUsedToFetchDebugMechMenuParameter 0x224cd8
 #define fetchDebugMechMenuParameter *(uint64*)(baseModule + offsetUsedToFetchDebugMechMenuParameterAddress)
 
-
-#define moneyBase baseModule + 0x4fdea0
+// GOG
+//#define moneyBase baseModule + 0x4fdea0
+//
+// Steam
+#define moneyBase baseModule + 0x4fdcf0
 
 #define mechResourceBytes 4632
 //Weapon types differ in size. Max seems to be laser weapons at 1608 bytes
@@ -171,9 +200,14 @@ const enum freelancerMenuStates {
 
 #define fetchDeployedWeaponCount *(uint32_t*)(*(uint64_t*)keyAddress + 0x2d10)
 
+// GOG
+//#define fetchResourceDictAddress *(uint64_t**)(baseModule+0x224CB8)
+//#define stringKeyComparisonFunction (_CoreCrtNonSecureSearchSortCompareFunction)(baseModule + 0xdda40)
+//#define getResourceAddressFunction (LPVOID(*)(long long*, uint64_t))(baseModule + 0xe0f20)
+// Steam
 #define fetchResourceDictAddress *(uint64_t**)(baseModule+0x224CB8)
-#define stringKeyComparisonFunction (_CoreCrtNonSecureSearchSortCompareFunction)(baseModule + 0xdda40)
-#define getResourceAddressFunction (LPVOID(*)(long long*, uint64_t))(baseModule + 0xe0f20)
+#define stringKeyComparisonFunction (_CoreCrtNonSecureSearchSortCompareFunction)(baseModule + 0xddad0)
+#define getResourceAddressFunction (LPVOID(*)(long long*, uint64_t))(baseModule + 0xe0fb0)
 
 //This value is arbitrary and can be changed. It sets the minimum size and expansion rate for arrays containing resource addresses
 #define arbitraryResourceCount 1024
